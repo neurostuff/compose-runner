@@ -1,0 +1,3 @@
+git+https://github.com/neurostuff/neurostore-python-sdk.git@fix/boolean_query
+git+https://github.com/neurostuff/neurosynth-compose-python-sdk.git@fix/boolean_query
+git+https://github.com/jdkent/NiMARE.git@nsc_runner
