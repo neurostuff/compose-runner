@@ -1,50 +1,37 @@
 from importlib import import_module
+import requests
 
-import neurosynth_compose_sdk
-from neurosynth_compose_sdk.apis.tags.compose_api import ComposeApi
-import neurostore_sdk
-from neurostore_sdk.apis.tags.store_api import StoreApi
 from nimare.workflows import cbma_workflow
 from nimare.nimads import Studyset, Annotation
 
-compose_configuration = neurosynth_compose_sdk.Configuration(
-    host = "https://compose.neurosynth.org/api"
-)
-store_configuration = neurostore_sdk.Configuration(
-    host = "https://neurostore.org/api"
-)
+COMPOSE_URL = "https://compose.neurosynth.org/api"
+STORE_URL = "https://neurostore.org/api"
 
-# Enter a context with an instance of the API client
-compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
-store_client = neurostore_sdk.ApiClient(store_configuration)
-
-# Create an instance of the API class
-compose_api = ComposeApi(compose_client)
-store_api = StoreApi(store_client)
 
 def load_specification(spec):
     """Returns function to run analysis on dataset."""
     est_mod = import_module(".".join(["nimare", "meta", spec["type"].lower()]))
     estimator = getattr(est_mod, spec["estimator"]["type"])
     if spec["estimator"].get("args"):
-        args = {**spec["estimator"]["args"]}
-        if spec["estimator"]["args"].get("**kwargs") is not None:
-            for k, v in spec["estimator"]["args"]["**kwargs"].items():
-                args[k] = v
-        estimator_init = estimator(**args)
+        est_args = {**spec["estimator"]["args"]}
+        if est_args.get("**kwargs") is not None:
+            for k, v in est_args["**kwargs"].items():
+                est_args[k] = v
+            del est_args["**kwargs"]
+        estimator_init = estimator(**est_args)
     else:
         estimator_init = estimator()
 
     if spec.get("corrector"):
         cor_mod = import_module(".".join(["nimare", "correct"]))
         corrector = getattr(cor_mod, spec["corrector"]["type"])
-        corrector_args = spec["corrector"].get("args")
-        if corrector_args:
-            if corrector_args.get("**kwargs") is not None:
-                for k, v in corrector_args["**kwargs"].items():
-                    corrector_args[k] = v
-                corrector_args.pop("**kwargs")
-            corrector_init = corrector(**corrector_args)
+        if spec["corrector"].get("args"):
+            cor_args = {**spec["corrector"]["args"]}
+            if cor_args.get("**kwargs") is not None:
+                for k, v in cor_args["**kwargs"].items():
+                    cor_args[k] = v
+                del cor_args["**kwargs"]
+            corrector_init = corrector(**cor_args)
         else:
             corrector_init = corrector()
     else:
@@ -54,16 +41,10 @@ def load_specification(spec):
 
 
 def download_bundle(meta_analysis_id):
-    meta_analysis = compose_api.meta_analyses_id_get(path_params={"id": meta_analysis_id}).body
-    studyset_dict = dict(store_api.studysets_id_get(
-        path_params={"id": meta_analysis["studyset"]}, query_params={"nested": True}
-    ).body)
-    annotation_dict = dict(store_api.annotations_id_get(
-        path_params={"id": meta_analysis["annotation"]}
-    ).body)
-    specification_dict = dict(compose_api.specifications_id_get(
-        path_params={"id": meta_analysis["specification"]}
-    ).body)
+    meta_analysis = requests.get(f"{COMPOSE_URL}/meta-analyses/{meta_analysis_id}").json()
+    studyset_dict = requests.get(f"{STORE_URL}/studysets/{meta_analysis['studyset']}?nested=true").json()
+    annotation_dict = requests.get(f"{STORE_URL}/annotations/{meta_analysis['annotation']}").json()
+    specification_dict = requests.get(f"{COMPOSE_URL}/specifications/{meta_analysis['specification']}").json()
     return studyset_dict, annotation_dict, specification_dict
 
 
