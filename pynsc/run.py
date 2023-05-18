@@ -1,11 +1,32 @@
 from importlib import import_module
+from pathlib import Path
+
 import requests
 
+import neurosynth_compose_sdk
+from neurosynth_compose_sdk.apis.tags.compose_api import ComposeApi
+import neurostore_sdk
+from neurostore_sdk.apis.tags.store_api import StoreApi
 from nimare.workflows import cbma_workflow
 from nimare.nimads import Studyset, Annotation
 
 COMPOSE_URL = "https://compose.neurosynth.org/api"
 STORE_URL = "https://neurostore.org/api"
+
+compose_configuration = neurosynth_compose_sdk.Configuration(
+    host=COMPOSE_URL
+)
+store_configuration = neurostore_sdk.Configuration(
+    host=STORE_URL
+)
+
+# Enter a context with an instance of the API client
+compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
+store_client = neurostore_sdk.ApiClient(store_configuration)
+
+# Create an instance of the API class
+compose_api = ComposeApi(compose_client)
+store_api = StoreApi(store_client)
 
 
 def load_specification(spec):
@@ -42,10 +63,11 @@ def load_specification(spec):
 
 def download_bundle(meta_analysis_id):
     meta_analysis = requests.get(f"{COMPOSE_URL}/meta-analyses/{meta_analysis_id}").json()
+    run_key = meta_analysis["run_key"]
     studyset_dict = requests.get(f"{STORE_URL}/studysets/{meta_analysis['studyset']}?nested=true").json()
     annotation_dict = requests.get(f"{STORE_URL}/annotations/{meta_analysis['annotation']}").json()
     specification_dict = requests.get(f"{COMPOSE_URL}/specifications/{meta_analysis['specification']}").json()
-    return studyset_dict, annotation_dict, specification_dict
+    return studyset_dict, annotation_dict, specification_dict, run_key
 
 
 def process_bundle(studyset_dict, annotation_dict, specification_dict):
@@ -59,15 +81,63 @@ def process_bundle(studyset_dict, annotation_dict, specification_dict):
     return dataset, estimator, corrector
 
 
-def upload_results(results, nsc_key=None, nv_key=None):
-    pass
+def upload_results(results, result_dir, result_id, nsc_key=None, nv_key=None):
+    statistical_maps = [
+        (
+            "statistical_maps",
+            open(result_dir / (m + ".nii.gz"), "rb"),
+        ) for m in results.maps.keys()
+    ]
+    cluster_tables = [
+        (
+            "cluster_tables",
+            open(result_dir / (f + ".tsv"), "rb"),
+        ) for f in results.tables.keys()
+        if "clust" in f
+    ]
+
+    diagnostic_tables = [
+        (
+            "diagnostic_tables",
+            open(result_dir / (f + ".tsv"), "rb"),
+        ) for f in results.tables.keys()
+        if "clust" not in f
+    ]
+    files = statistical_maps + cluster_tables + diagnostic_tables
+    headers = {"Compose-Upload-Key": nsc_key}
+    upload_resp = requests.put(
+        f"{COMPOSE_URL}/meta-analysis-results/{result_id}",
+        files=files,
+        json={"method_description": results.description_},
+        headers=headers,
+    )
+
+    return upload_resp.json()
 
 
 def run(meta_analysis_id, nsc_key=None, nv_key=None):
-    studyset, annotation, specification = download_bundle(meta_analysis_id)
+    studyset, annotation, specification, run_key = download_bundle(meta_analysis_id)
+    if nsc_key is None:
+        nsc_key = run_key
+
+    # take a snapshot of the studyset and annotation (before running the workflow)
+    headers = {"Compose-Upload-Key": nsc_key}
+    resp = requests.post(
+        f"{COMPOSE_URL}/meta-analysis-results",
+        json={
+            "meta_analysis_id": meta_analysis_id,
+            # "studyset_snapshot": studyset, ## fix this
+            # "annotation_snapshot": annotation, ## fix this
+        },
+        headers=headers,
+    )
+    result_id = resp.json()["id"]
     dataset, estimator, corrector = process_bundle(studyset, annotation, specification)
-    results = cbma_workflow(dataset, estimator, corrector)
-    upload_results(results, nsc_key, nv_key)
+
+    output_dir = Path("results")
+    output_dir.mkdir(exist_ok=True)
+    results = cbma_workflow(dataset, estimator, corrector, output_dir=output_dir)
+    upload_results(results, output_dir, result_id, nsc_key, nv_key)
 
 
-run("3d5yYTAupehV")
+run("5kpBKDqxNVsU")
