@@ -62,12 +62,24 @@ def load_specification(spec):
 
 
 def download_bundle(meta_analysis_id):
+    cached = True
     meta_analysis = requests.get(f"{COMPOSE_URL}/meta-analyses/{meta_analysis_id}").json()
+    # run key for running this particular meta-analysis
     run_key = meta_analysis["run_key"]
-    studyset_dict = requests.get(f"{STORE_URL}/studysets/{meta_analysis['studyset']}?nested=true").json()
-    annotation_dict = requests.get(f"{STORE_URL}/annotations/{meta_analysis['annotation']}").json()
+    # check to see if studyset and annotation are cached
+    studyset_dict = annotation_dict = None
+    if meta_analysis["cached_studyset"]:
+        studyset_dict = requests.get(f"{COMPOSE_URL}/studysets/{meta_analysis['cached_studyset']}").json()["snapshot"].get("snapshot", None)
+    if meta_analysis["cached_annotation"]:
+        annotation_dict = requests.get(f"{COMPOSE_URL}/annotations/{meta_analysis['cached_annotation']}").json()["snapshot"].get("snapshot", None)
+    # if either are not cached, download them from neurostore
+    if studyset_dict is None or annotation_dict is None:
+        studyset_dict = requests.get(f"{STORE_URL}/studysets/{meta_analysis['studyset']}?nested=true").json()
+        annotation_dict = requests.get(f"{STORE_URL}/annotations/{meta_analysis['annotation']}").json()
+        cached = False
+
     specification_dict = requests.get(f"{COMPOSE_URL}/specifications/{meta_analysis['specification']}").json()
-    return studyset_dict, annotation_dict, specification_dict, run_key
+    return studyset_dict, annotation_dict, specification_dict, run_key, cached
 
 
 def process_bundle(studyset_dict, annotation_dict, specification_dict):
@@ -116,28 +128,33 @@ def upload_results(results, result_dir, result_id, nsc_key=None, nv_key=None):
 
 
 def run(meta_analysis_id, nsc_key=None, nv_key=None):
-    studyset, annotation, specification, run_key = download_bundle(meta_analysis_id)
+    studyset, annotation, specification, run_key, cached = download_bundle(meta_analysis_id)
     if nsc_key is None:
         nsc_key = run_key
 
     # take a snapshot of the studyset and annotation (before running the workflow)
     headers = {"Compose-Upload-Key": nsc_key}
+    data = {"meta_analysis_id": meta_analysis_id}
+    if not cached:
+        data.update({
+            "studyset_snapshot": studyset,
+            "annotation_snapshot": annotation,
+        })
     resp = requests.post(
         f"{COMPOSE_URL}/meta-analysis-results",
-        json={
-            "meta_analysis_id": meta_analysis_id,
-            # "studyset_snapshot": studyset, ## fix this
-            # "annotation_snapshot": annotation, ## fix this
-        },
+        json=data,
         headers=headers,
     )
-    result_id = resp.json()["id"]
+    result_id = resp.json().get("id", None)
+    if result_id is None:
+        raise ValueError(f"Could not create result for {meta_analysis_id}")
     dataset, estimator, corrector = process_bundle(studyset, annotation, specification)
 
     output_dir = Path("results")
     output_dir.mkdir(exist_ok=True)
     results = cbma_workflow(dataset, estimator, corrector, output_dir=output_dir)
-    upload_results(results, output_dir, result_id, nsc_key, nv_key)
+    upload_response = upload_results(results, output_dir, result_id, nsc_key, nv_key)
+    return upload_response, results
 
 
 run("5kpBKDqxNVsU")
