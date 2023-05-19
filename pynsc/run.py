@@ -156,5 +156,4 @@ def run(meta_analysis_id, nsc_key=None, nv_key=None):
     upload_response = upload_results(results, output_dir, result_id, nsc_key, nv_key)
     return upload_response, results
 
-
-run("5kpBKDqxNVsU")
+# run("5kpBKDqxNVsU")
