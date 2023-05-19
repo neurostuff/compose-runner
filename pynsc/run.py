@@ -4,9 +4,9 @@ from pathlib import Path
 import requests
 
 import neurosynth_compose_sdk
-from neurosynth_compose_sdk.apis.tags.compose_api import ComposeApi
+from neurosynth_compose_sdk.api.compose_api import ComposeApi
 import neurostore_sdk
-from neurostore_sdk.apis.tags.store_api import StoreApi
+from neurostore_sdk.api.store_api import StoreApi
 from nimare.workflows import cbma_workflow
 from nimare.nimads import Studyset, Annotation
 
