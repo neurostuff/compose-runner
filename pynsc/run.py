@@ -10,23 +10,21 @@ from neurostore_sdk.api.store_api import StoreApi
 from nimare.workflows import cbma_workflow
 from nimare.nimads import Studyset, Annotation
 
-COMPOSE_URL = "https://compose.neurosynth.org/api"
-STORE_URL = "https://neurostore.org/api"
 
-compose_configuration = neurosynth_compose_sdk.Configuration(
-    host=COMPOSE_URL
-)
-store_configuration = neurostore_sdk.Configuration(
-    host=STORE_URL
-)
+# compose_configuration = neurosynth_compose_sdk.Configuration(
+#     host=COMPOSE_URL
+# )
+# store_configuration = neurostore_sdk.Configuration(
+#     host=STORE_URL
+# )
 
-# Enter a context with an instance of the API client
-compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
-store_client = neurostore_sdk.ApiClient(store_configuration)
+# # Enter a context with an instance of the API client
+# compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
+# store_client = neurostore_sdk.ApiClient(store_configuration)
 
-# Create an instance of the API class
-compose_api = ComposeApi(compose_client)
-store_api = StoreApi(store_client)
+# # Create an instance of the API class
+# compose_api = ComposeApi(compose_client)
+# store_api = StoreApi(store_client)
 
 
 def load_specification(spec):
@@ -69,9 +67,11 @@ def download_bundle(meta_analysis_id):
     # check to see if studyset and annotation are cached
     studyset_dict = annotation_dict = None
     if meta_analysis["cached_studyset"]:
-        studyset_dict = requests.get(f"{COMPOSE_URL}/studysets/{meta_analysis['cached_studyset']}").json()["snapshot"].get("snapshot", None)
+        studyset_dict = requests.get(f"{COMPOSE_URL}/studysets/{meta_analysis['cached_studyset']}").json()["snapshot"]
+        studyset_dict = None if studyset_dict is None else studyset_dict.get("snapshot", None)
     if meta_analysis["cached_annotation"]:
-        annotation_dict = requests.get(f"{COMPOSE_URL}/annotations/{meta_analysis['cached_annotation']}").json()["snapshot"].get("snapshot", None)
+        annotation_dict = requests.get(f"{COMPOSE_URL}/annotations/{meta_analysis['cached_annotation']}").json()["snapshot"]
+        annotation_dict = None if annotation_dict is None else annotation_dict.get("snapshot", None)
     # if either are not cached, download them from neurostore
     if studyset_dict is None or annotation_dict is None:
         studyset_dict = requests.get(f"{STORE_URL}/studysets/{meta_analysis['studyset']}?nested=true").json()
@@ -127,7 +127,17 @@ def upload_results(results, result_dir, result_id, nsc_key=None, nv_key=None):
     return upload_resp.json()
 
 
-def run(meta_analysis_id, nsc_key=None, nv_key=None):
+def run(meta_analysis_id, nsc_key=None, nv_key=None, staging=False):
+    global COMPOSE_URL, STORE_URL
+    if staging:
+        # staging
+        COMPOSE_URL = "https://synth.neurostore.xyz/api"
+        STORE_URL = "https://neurostore.xyz/api"
+    else:
+        # production
+        COMPOSE_URL = "https://compose.neurosynth.org/api"
+        STORE_URL = "https://neurostore.org/api"
+
     studyset, annotation, specification, run_key, cached = download_bundle(meta_analysis_id)
     if nsc_key is None:
         nsc_key = run_key
@@ -162,5 +172,9 @@ if __name__ == '__main__':
     if len(sys.argv) < 3:
         print("Usage: python -m pynsc.run run <meta-analysis-id>")
         sys.exit(1)
-    run(sys.argv[2])
+    if sys.argv[3] == "--staging":
+        staging = True
+    else:
+        staging = False
+    run(sys.argv[2], staging=staging)
     # run("5kpBKDqxNVsU")
