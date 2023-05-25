@@ -104,16 +104,16 @@ def upload_results(results, result_dir, result_id, nsc_key=None, nv_key=None):
         (
             "cluster_tables",
             open(result_dir / (f + ".tsv"), "rb"),
-        ) for f in results.tables.keys()
-        if "clust" in f
+        ) for f, df in results.tables.items()
+        if "clust" in f and not df.empty
     ]
 
     diagnostic_tables = [
         (
             "diagnostic_tables",
             open(result_dir / (f + ".tsv"), "rb"),
-        ) for f in results.tables.keys()
-        if "clust" not in f
+        ) for f, df in results.tables.items()
+        if "clust" not in f and df is not None
     ]
     files = statistical_maps + cluster_tables + diagnostic_tables
     headers = {"Compose-Upload-Key": nsc_key}
@@ -166,6 +166,8 @@ def run(meta_analysis_id, nsc_key=None, nv_key=None, staging=False):
     upload_response = upload_results(results, output_dir, result_id, nsc_key, nv_key)
     return upload_response, results
 
+
+run("3opENJpHxRsH", staging=True)
 
 if __name__ == '__main__':
     import sys
