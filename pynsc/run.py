@@ -11,166 +11,222 @@ from nimare.workflows import cbma_workflow
 from nimare.nimads import Studyset, Annotation
 
 
-# compose_configuration = neurosynth_compose_sdk.Configuration(
-#     host=COMPOSE_URL
-# )
-# store_configuration = neurostore_sdk.Configuration(
-#     host=STORE_URL
-# )
+class Runner:
+    """Runner for executing and uploading a meta-analysis workflow."""
+    def __init__(
+        self,
+        meta_analysis_id,
+        staging=False,
+        result_dir=None,
+        nsc_key=None,
+        nv_key=None,
+    ):
+        # the meta-analysis id associated with this run
+        self.meta_analysis_id = meta_analysis_id
 
-# # Enter a context with an instance of the API client
-# compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
-# store_client = neurostore_sdk.ApiClient(store_configuration)
-
-# # Create an instance of the API class
-# compose_api = ComposeApi(compose_client)
-# store_api = StoreApi(store_client)
-
-
-def load_specification(spec):
-    """Returns function to run analysis on dataset."""
-    est_mod = import_module(".".join(["nimare", "meta", spec["type"].lower()]))
-    estimator = getattr(est_mod, spec["estimator"]["type"])
-    if spec["estimator"].get("args"):
-        est_args = {**spec["estimator"]["args"]}
-        if est_args.get("**kwargs") is not None:
-            for k, v in est_args["**kwargs"].items():
-                est_args[k] = v
-            del est_args["**kwargs"]
-        estimator_init = estimator(**est_args)
-    else:
-        estimator_init = estimator()
-
-    if spec.get("corrector"):
-        cor_mod = import_module(".".join(["nimare", "correct"]))
-        corrector = getattr(cor_mod, spec["corrector"]["type"])
-        if spec["corrector"].get("args"):
-            cor_args = {**spec["corrector"]["args"]}
-            if cor_args.get("**kwargs") is not None:
-                for k, v in cor_args["**kwargs"].items():
-                    cor_args[k] = v
-                del cor_args["**kwargs"]
-            corrector_init = corrector(**cor_args)
+        if staging:
+            # staging
+            self.compose_url = "https://synth.neurostore.xyz/api"
+            self.store_url = "https://neurostore.xyz/api"
         else:
-            corrector_init = corrector()
-    else:
-        corrector_init = None
+            # production
+            self.compose_url = "https://compose.neurosynth.org/api"
+            self.store_url = "https://neurostore.org/api"
 
-    return estimator_init, corrector_init
+        # Enter a context with an instance of the API client
+        compose_configuration = neurosynth_compose_sdk.Configuration(
+            host=self.compose_url
+        )
+        store_configuration = neurostore_sdk.Configuration(host=self.store_url)
+        compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
+        store_client = neurostore_sdk.ApiClient(store_configuration)
+        self.compose_api = ComposeApi(compose_client)
+        self.store_api = StoreApi(store_client)
+
+        # initialize inputs
+        self.cached_studyset = None
+        self.cached_annotation = None
+        self.cached_specification = None
+        self.dataset = None
+        self.estimator = None
+        self.corrector = None
+
+        # initialize api-keys
+        self.nsc_key = nsc_key  # neurosynth compose key to upload to neurosynth compose
+        self.nv_key = nv_key  # neurovault key to upload to neurovault
+
+        # result directory
+        if result_dir is None:
+            self.result_dir = Path.cwd() / "results"
+        else:
+            self.result_dir = Path(result_dir)
+
+        # whether the inputs were cached from neurostore
+        self.cached = True
+
+        # initialize outputs
+        self.result_id = None
+        self.meta_results = None
+        self.results_object = None
+
+    def run_workflow(self):
+        self.download_bundle()
+        self.process_bundle()
+        self.create_result_object()
+        self.run_meta_analysis()
+        self.upload_results()
+
+    def download_bundle(self):
+        meta_analysis = requests.get(
+                f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true"
+            ).json()
+        # meta_analysis = self.compose_api.meta_analyses_id_get(
+        #     id=self.meta_analysis_id, nested=True
+        # ).to_dict()  # does not currently return run_key
+
+        # check to see if studyset and annotation are cached
+        studyset_dict = annotation_dict = None
+        if meta_analysis["studyset"]:
+            studyset_dict = meta_analysis["studyset"]["snapshot"]
+            self.cached_studyset = (
+                None
+                if studyset_dict is None
+                else studyset_dict.get("snapshot", None)
+            )
+        if meta_analysis["annotation"]:
+            annotation_dict = meta_analysis["annotation"]["snapshot"]
+            self.cached_annotation = (
+                None
+                if annotation_dict is None
+                else annotation_dict.get("snapshot", None)
+            )
+        # if either are not cached, download them from neurostore
+        if self.cached_studyset is None or self.cached_annotation is None:
+            self.cached_studyset = requests.get(
+                f"{self.store_url}/studysets/{meta_analysis['studyset']}?nested=true"
+            ).json()
+            self.cached_annotation = requests.get(
+                f"{self.store_url}/annotations/{meta_analysis['annotation']}"
+            ).json()
+            # set cached to false
+            self.cached = False
+        # retrieve specification
+        self.cached_specification = meta_analysis["specification"]
+
+        # run key for running this particular meta-analysis
+        self.nsc_key = meta_analysis["run_key"]
+
+    def process_bundle(self):
+        studyset = Studyset(self.cached_studyset)
+        annotation = Annotation(self.cached_annotation, studyset)
+        include = self.cached_specification["filter"]
+        analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{include}"]]
+        filtered_studyset = studyset.slice(analyses=analysis_ids)
+        dataset = filtered_studyset.to_dataset()
+        estimator, corrector = self.load_specification()
+        self.dataset = dataset
+        self.estimator = estimator
+        self.corrector = corrector
+
+    def create_result_object(self):
+        # take a snapshot of the studyset and annotation (before running the workflow)
+        headers = {"Compose-Upload-Key": self.nsc_key}
+        data = {"meta_analysis_id": self.meta_analysis_id}
+        if not self.cached:
+            data.update(
+                {
+                    "studyset_snapshot": self.cached_studyset,
+                    "annotation_snapshot": self.cached_annotation,
+                }
+            )
+        resp = requests.post(
+            f"{self.compose_url}/meta-analysis-results",
+            json=data,
+            headers=headers,
+        )
+        self.result_id = resp.json().get("id", None)
+        if self.result_id is None:
+            raise ValueError(f"Could not create result for {self.meta_analysis_id}")
+
+    def run_meta_analysis(self):
+        self.meta_results = cbma_workflow(
+            self.dataset, self.estimator, self.corrector, output_dir=self.result_dir
+        )
+
+    def upload_results(self):
+        statistical_maps = [
+            (
+                "statistical_maps",
+                open(self.result_dir / (m + ".nii.gz"), "rb"),
+            )
+            for m in self.meta_results.maps.keys()
+            if not m.startswith("label_")
+        ]
+        cluster_tables = [
+            (
+                "cluster_tables",
+                open(self.result_dir / (f + ".tsv"), "rb"),
+            )
+            for f, df in self.meta_results.tables.items()
+            if "clust" in f and not df.empty
+        ]
+
+        diagnostic_tables = [
+            (
+                "diagnostic_tables",
+                open(self.result_dir / (f + ".tsv"), "rb"),
+            )
+            for f, df in self.meta_results.tables.items()
+            if "clust" not in f and df is not None
+        ]
+        files = statistical_maps + cluster_tables + diagnostic_tables
+
+        headers = {"Compose-Upload-Key": self.nsc_key}
+        self.results_object = requests.put(
+            f"{self.compose_url}/meta-analysis-results/{self.result_id}",
+            files=files,
+            json={"method_description": self.meta_results.description_},
+            headers=headers,
+        )
+
+    def load_specification(self):
+        """Returns function to run analysis on dataset."""
+        spec = self.cached_specification
+        est_mod = import_module(".".join(["nimare", "meta", spec["type"].lower()]))
+        estimator = getattr(est_mod, spec["estimator"]["type"])
+        if spec["estimator"].get("args"):
+            est_args = {**spec["estimator"]["args"]}
+            if est_args.get("**kwargs") is not None:
+                for k, v in est_args["**kwargs"].items():
+                    est_args[k] = v
+                del est_args["**kwargs"]
+            estimator_init = estimator(**est_args)
+        else:
+            estimator_init = estimator()
+
+        if spec.get("corrector"):
+            cor_mod = import_module(".".join(["nimare", "correct"]))
+            corrector = getattr(cor_mod, spec["corrector"]["type"])
+            if spec["corrector"].get("args"):
+                cor_args = {**spec["corrector"]["args"]}
+                if cor_args.get("**kwargs") is not None:
+                    for k, v in cor_args["**kwargs"].items():
+                        cor_args[k] = v
+                    del cor_args["**kwargs"]
+                corrector_init = corrector(**cor_args)
+            else:
+                corrector_init = corrector()
+        else:
+            corrector_init = None
+
+        return estimator_init, corrector_init
 
 
-def download_bundle(meta_analysis_id):
-    cached = True
-    meta_analysis = requests.get(f"{COMPOSE_URL}/meta-analyses/{meta_analysis_id}").json()
-    # run key for running this particular meta-analysis
-    run_key = meta_analysis["run_key"]
-    # check to see if studyset and annotation are cached
-    studyset_dict = annotation_dict = None
-    if meta_analysis["cached_studyset"]:
-        studyset_dict = requests.get(f"{COMPOSE_URL}/studysets/{meta_analysis['cached_studyset']}").json()["snapshot"]
-        studyset_dict = None if studyset_dict is None else studyset_dict.get("snapshot", None)
-    if meta_analysis["cached_annotation"]:
-        annotation_dict = requests.get(f"{COMPOSE_URL}/annotations/{meta_analysis['cached_annotation']}").json()["snapshot"]
-        annotation_dict = None if annotation_dict is None else annotation_dict.get("snapshot", None)
-    # if either are not cached, download them from neurostore
-    if studyset_dict is None or annotation_dict is None:
-        studyset_dict = requests.get(f"{STORE_URL}/studysets/{meta_analysis['studyset']}?nested=true").json()
-        annotation_dict = requests.get(f"{STORE_URL}/annotations/{meta_analysis['annotation']}").json()
-        cached = False
+# Runner("3opENJpHxRsH", staging=True).run_workflow()
 
-    specification_dict = requests.get(f"{COMPOSE_URL}/specifications/{meta_analysis['specification']}").json()
-    return studyset_dict, annotation_dict, specification_dict, run_key, cached
-
-
-def process_bundle(studyset_dict, annotation_dict, specification_dict):
-    studyset = Studyset(studyset_dict)
-    annotation = Annotation(annotation_dict, studyset)
-    include = specification_dict["filter"]
-    analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{include}"]]
-    filtered_studyset = studyset.slice(analyses=analysis_ids)
-    dataset = filtered_studyset.to_dataset()
-    estimator, corrector = load_specification(specification_dict)
-    return dataset, estimator, corrector
-
-
-def upload_results(results, result_dir, result_id, nsc_key=None, nv_key=None):
-    statistical_maps = [
-        (
-            "statistical_maps",
-            open(result_dir / (m + ".nii.gz"), "rb"),
-        ) for m in results.maps.keys() if not m.startswith("label_")
-    ]
-    cluster_tables = [
-        (
-            "cluster_tables",
-            open(result_dir / (f + ".tsv"), "rb"),
-        ) for f, df in results.tables.items()
-        if "clust" in f and not df.empty
-    ]
-
-    diagnostic_tables = [
-        (
-            "diagnostic_tables",
-            open(result_dir / (f + ".tsv"), "rb"),
-        ) for f, df in results.tables.items()
-        if "clust" not in f and df is not None
-    ]
-    files = statistical_maps + cluster_tables + diagnostic_tables
-    headers = {"Compose-Upload-Key": nsc_key}
-    upload_resp = requests.put(
-        f"{COMPOSE_URL}/meta-analysis-results/{result_id}",
-        files=files,
-        json={"method_description": results.description_},
-        headers=headers,
-    )
-
-    return upload_resp.json()
-
-
-def run(meta_analysis_id, nsc_key=None, nv_key=None, staging=False):
-    global COMPOSE_URL, STORE_URL
-    if staging:
-        # staging
-        COMPOSE_URL = "https://synth.neurostore.xyz/api"
-        STORE_URL = "https://neurostore.xyz/api"
-    else:
-        # production
-        COMPOSE_URL = "https://compose.neurosynth.org/api"
-        STORE_URL = "https://neurostore.org/api"
-
-    studyset, annotation, specification, run_key, cached = download_bundle(meta_analysis_id)
-    if nsc_key is None:
-        nsc_key = run_key
-
-    # take a snapshot of the studyset and annotation (before running the workflow)
-    headers = {"Compose-Upload-Key": nsc_key}
-    data = {"meta_analysis_id": meta_analysis_id}
-    if not cached:
-        data.update({
-            "studyset_snapshot": studyset,
-            "annotation_snapshot": annotation,
-        })
-    resp = requests.post(
-        f"{COMPOSE_URL}/meta-analysis-results",
-        json=data,
-        headers=headers,
-    )
-    result_id = resp.json().get("id", None)
-    if result_id is None:
-        raise ValueError(f"Could not create result for {meta_analysis_id}")
-    dataset, estimator, corrector = process_bundle(studyset, annotation, specification)
-
-    output_dir = Path("results")
-    output_dir.mkdir(exist_ok=True)
-    results = cbma_workflow(dataset, estimator, corrector, output_dir=output_dir)
-    upload_response = upload_results(results, output_dir, result_id, nsc_key, nv_key)
-    return upload_response, results
-
-
-# run("3opENJpHxRsH", staging=True)
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 3:
         print("Usage: python -m pynsc.run run <meta-analysis-id>")
         sys.exit(1)
@@ -178,5 +234,5 @@ if __name__ == '__main__':
         staging = True
     else:
         staging = False
-    run(sys.argv[2], staging=staging)
+    Runner(sys.argv[2], staging=staging).run_workflow()
     # run("5kpBKDqxNVsU")
