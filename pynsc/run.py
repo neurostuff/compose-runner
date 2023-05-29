@@ -98,7 +98,7 @@ def upload_results(results, result_dir, result_id, nsc_key=None, nv_key=None):
         (
             "statistical_maps",
             open(result_dir / (m + ".nii.gz"), "rb"),
-        ) for m in results.maps.keys()
+        ) for m in results.maps.keys() if not m.startswith("label_")
     ]
     cluster_tables = [
         (
@@ -167,7 +167,7 @@ def run(meta_analysis_id, nsc_key=None, nv_key=None, staging=False):
     return upload_response, results
 
 
-# run("3opENJpHxRsH", staging=True)
+run("3opENJpHxRsH", staging=True)
 
 if __name__ == '__main__':
     import sys
