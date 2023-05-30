@@ -13,7 +13,6 @@ from nimare.nimads import Studyset, Annotation
 
 class Runner:
     """Runner for executing and uploading a meta-analysis workflow."""
-
     def __init__(
         self,
         meta_analysis_id,
@@ -68,9 +67,7 @@ class Runner:
         # initialize outputs
         self.result_id = None
         self.meta_results = None  # the meta-analysis result output from nimare
-        self.results_object = (
-            None  # the result object represented on neurosynth compose
-        )
+        self.results_object = None  # the result object represented on neurosynth compose
 
     def run_workflow(self):
         self.download_bundle()
@@ -81,8 +78,8 @@ class Runner:
 
     def download_bundle(self):
         meta_analysis = requests.get(
-            f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true"
-        ).json()
+                f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true"
+            ).json()
         # meta_analysis = self.compose_api.meta_analyses_id_get(
         #     id=self.meta_analysis_id, nested=True
         # ).to_dict()  # does not currently return run_key
@@ -92,7 +89,9 @@ class Runner:
         if meta_analysis["studyset"]:
             studyset_dict = meta_analysis["studyset"]["snapshot"]
             self.cached_studyset = (
-                None if studyset_dict is None else studyset_dict.get("snapshot", None)
+                None
+                if studyset_dict is None
+                else studyset_dict.get("snapshot", None)
             )
         if meta_analysis["annotation"]:
             annotation_dict = meta_analysis["annotation"]["snapshot"]
@@ -104,7 +103,10 @@ class Runner:
         # if either are not cached, download them from neurostore
         if self.cached_studyset is None or self.cached_annotation is None:
             self.cached_studyset = requests.get(
-                f"{self.store_url}/studysets/{meta_analysis['studyset']['neurostore_id']}?nested=true"
+                (
+                    f"{self.store_url}/studysets/"
+                    f"{meta_analysis['studyset']['neurostore_id']}?nested=true"
+                )
             ).json()
             self.cached_annotation = requests.get(
                 f"{self.store_url}/annotations/{meta_analysis['annotation']['neurostore_id']}"
@@ -233,8 +235,8 @@ def run(meta_analysis_id, staging=False, result_dir=None, nsc_key=None, nv_key=N
     )
 
     runner.run_workflow()
-    url = "/".join(
-        [runner.compose_url.rstrip("/api"), "meta-analyses", meta_analysis_id]
+    url = '/'.join(
+        [runner.compose_url.rstrip('/api'), "meta-analyses", meta_analysis_id]
     )
 
     return url, runner.meta_results
