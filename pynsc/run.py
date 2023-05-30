@@ -222,17 +222,15 @@ class Runner:
         return estimator_init, corrector_init
 
 
-# Runner("3opENJpHxRsH", staging=True).run_workflow()
+def run(meta_analysis_id, staging, result_dir, nsc_key, nv_key):
+    runner = Runner(
+        meta_analysis_id=meta_analysis_id,
+        staging=staging,
+        result_dir=result_dir,
+        nsc_key=nsc_key,
+        nv_key=nv_key,
+    )
 
-if __name__ == "__main__":
-    import sys
+    runner.run_workflow()
 
-    if len(sys.argv) < 3:
-        print("Usage: python -m pynsc.run run <meta-analysis-id>")
-        sys.exit(1)
-    if sys.argv[3] == "--staging":
-        staging = True
-    else:
-        staging = False
-    Runner(sys.argv[2], staging=staging).run_workflow()
-    # run("5kpBKDqxNVsU")
+    return runner.results_object
