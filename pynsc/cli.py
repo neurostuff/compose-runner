@@ -1,6 +1,6 @@
 import click
 
-from pynsc.run import Runner, run
+from pynsc.run import run
 
 
 @click.command()
@@ -19,4 +19,5 @@ def cli(meta_analysis_id, staging, result_dir, nsc_key, nv_key):
 
     META_ANALYSIS_ID is the id of the meta-analysis on neurosynth-compose.
     """
-    print(run(meta_analysis_id, staging, result_dir, nsc_key, nv_key))
+    result_object, _ = run(meta_analysis_id, staging, result_dir, nsc_key, nv_key)
+    print(result_object)

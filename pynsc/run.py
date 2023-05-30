@@ -66,8 +66,8 @@ class Runner:
 
         # initialize outputs
         self.result_id = None
-        self.meta_results = None
-        self.results_object = None
+        self.meta_results = None  # the meta-analysis result output from nimare
+        self.results_object = None  # the result object represented on neurosynth compose
 
     def run_workflow(self):
         self.download_bundle()
@@ -233,4 +233,4 @@ def run(meta_analysis_id, staging=True, result_dir=None, nsc_key=None, nv_key=No
 
     runner.run_workflow()
 
-    return runner.results_object
+    return runner.results_object, runner.meta_results
