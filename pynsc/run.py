@@ -222,7 +222,7 @@ class Runner:
         return estimator_init, corrector_init
 
 
-def run(meta_analysis_id, staging, result_dir, nsc_key, nv_key):
+def run(meta_analysis_id, staging=True, result_dir=None, nsc_key=None, nv_key=None):
     runner = Runner(
         meta_analysis_id=meta_analysis_id,
         staging=staging,
