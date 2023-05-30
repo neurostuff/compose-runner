@@ -103,10 +103,10 @@ class Runner:
         # if either are not cached, download them from neurostore
         if self.cached_studyset is None or self.cached_annotation is None:
             self.cached_studyset = requests.get(
-                f"{self.store_url}/studysets/{meta_analysis['studyset']}?nested=true"
+                f"{self.store_url}/studysets/{meta_analysis['studyset']['neurostore_id']}?nested=true"
             ).json()
             self.cached_annotation = requests.get(
-                f"{self.store_url}/annotations/{meta_analysis['annotation']}"
+                f"{self.store_url}/annotations/{meta_analysis['annotation']['neurostore_id']}"
             ).json()
             # set cached to false
             self.cached = False
@@ -222,7 +222,7 @@ class Runner:
         return estimator_init, corrector_init
 
 
-def run(meta_analysis_id, staging=True, result_dir=None, nsc_key=None, nv_key=None):
+def run(meta_analysis_id, staging=False, result_dir=None, nsc_key=None, nv_key=None):
     runner = Runner(
         meta_analysis_id=meta_analysis_id,
         staging=staging,
