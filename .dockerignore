@@ -1,3 +1,4 @@
 .runner
 .nsc
 .pytest_cache
+pynsc/tests/cassettes

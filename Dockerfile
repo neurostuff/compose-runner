@@ -4,12 +4,14 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements.txt
+COPY setup.cfg .
 
-RUN pip install -r requirements.txt
+COPY pyproject.toml .
+
+RUN pip install .
 
 COPY . .
 
 RUN pip install .
 
-CMD ["python", "-m", "pynsc.run", "run"]
+ENTRYPOINT ["compose-run"]
