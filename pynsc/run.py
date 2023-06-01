@@ -231,7 +231,7 @@ class Runner:
 def run(meta_analysis_id, environment='production', result_dir=None, nsc_key=None, nv_key=None):
     runner = Runner(
         meta_analysis_id=meta_analysis_id,
-        environment='production',
+        environment=environment,
         result_dir=result_dir,
         nsc_key=nsc_key,
         nv_key=nv_key,
