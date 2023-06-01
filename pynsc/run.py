@@ -16,7 +16,7 @@ class Runner:
     def __init__(
         self,
         meta_analysis_id,
-        staging=False,
+        environment='production',
         result_dir=None,
         nsc_key=None,
         nv_key=None,
@@ -24,10 +24,13 @@ class Runner:
         # the meta-analysis id associated with this run
         self.meta_analysis_id = meta_analysis_id
 
-        if staging:
+        if environment == "staging":
             # staging
             self.compose_url = "https://synth.neurostore.xyz/api"
             self.store_url = "https://neurostore.xyz/api"
+        elif environment == "local":
+            self.compose_url = "http://localhost:81/api"
+            self.store_url = "http://localhost:80/api"
         else:
             # production
             self.compose_url = "https://compose.neurosynth.org/api"
@@ -225,10 +228,10 @@ class Runner:
         return estimator_init, corrector_init
 
 
-def run(meta_analysis_id, staging=False, result_dir=None, nsc_key=None, nv_key=None):
+def run(meta_analysis_id, environment='production', result_dir=None, nsc_key=None, nv_key=None):
     runner = Runner(
         meta_analysis_id=meta_analysis_id,
-        staging=staging,
+        environment='production',
         result_dir=result_dir,
         nsc_key=nsc_key,
         nv_key=nv_key,

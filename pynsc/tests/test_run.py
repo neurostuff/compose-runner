@@ -1,4 +1,3 @@
-
 import pytest
 from pynsc.run import Runner
 
@@ -7,7 +6,7 @@ from pynsc.run import Runner
 def test_download_bundle():
     runner = Runner(
         meta_analysis_id="3opENJpHxRsH",
-        staging=True,
+        environment="staging",
     )
     runner.download_bundle()
     assert runner.cached_studyset is not None
@@ -19,6 +18,6 @@ def test_download_bundle():
 def test_run_workflow():
     runner = Runner(
         meta_analysis_id="3opENJpHxRsH",
-        staging=True,
+        environment="staging",
     )
     runner.run_workflow()
