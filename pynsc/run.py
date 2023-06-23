@@ -7,7 +7,7 @@ import neurosynth_compose_sdk
 from neurosynth_compose_sdk.api.compose_api import ComposeApi
 import neurostore_sdk
 from neurostore_sdk.api.store_api import StoreApi
-from nimare.workflows import cbma_workflow
+from nimare.workflows import CBMAWorkflow
 from nimare.nimads import Studyset, Annotation
 
 
@@ -155,9 +155,13 @@ class Runner:
             raise ValueError(f"Could not create result for {self.meta_analysis_id}")
 
     def run_meta_analysis(self):
-        self.meta_results = cbma_workflow(
-            self.dataset, self.estimator, self.corrector, output_dir=self.result_dir
+        workflow = CBMAWorkflow(
+            estimator=self.estimator,
+            corrector=self.corrector,
+            diagnostics=("focuscounter",),
+            output_dir=self.result_dir,
         )
+        self.meta_results = workflow.fit(self.dataset)
 
     def upload_results(self):
         statistical_maps = [
