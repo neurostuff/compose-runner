@@ -158,7 +158,7 @@ class Runner:
         workflow = CBMAWorkflow(
             estimator=self.estimator,
             corrector=self.corrector,
-            diagnostics=("focuscounter",),
+            diagnostics="focuscounter",
             output_dir=self.result_dir,
         )
         self.meta_results = workflow.fit(self.dataset)
