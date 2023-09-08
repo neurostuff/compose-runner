@@ -9,6 +9,7 @@ import neurostore_sdk
 from neurostore_sdk.api.store_api import StoreApi
 from nimare.workflows import CBMAWorkflow
 from nimare.nimads import Studyset, Annotation
+from nimare.meta.cbma import ALE
 
 
 class Runner:
@@ -130,6 +131,7 @@ class Runner:
         filtered_studyset = studyset.slice(analyses=analysis_ids)
         dataset = filtered_studyset.to_dataset()
         estimator, corrector = self.load_specification()
+        estimator, corrector = self.validate_specification(estimator, corrector, dataset)
         self.dataset = dataset
         self.estimator = estimator
         self.corrector = corrector
@@ -230,6 +232,14 @@ class Runner:
             corrector_init = None
 
         return estimator_init, corrector_init
+
+    def validate_specification(self, estimator, corrector, dataset):
+        if isinstance(estimator, ALE) and estimator.kernel_transformer.sample_size is not None:
+            if any(dataset.metadata['sample_sizes'].isnull()):
+                raise ValueError(
+                    "Sample size is required for ALE with sample size weighting."
+                )
+        return estimator, corrector
 
 
 def run(meta_analysis_id, environment='production', result_dir=None, nsc_key=None, nv_key=None):
