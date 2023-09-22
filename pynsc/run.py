@@ -29,6 +29,11 @@ class Runner:
             # staging
             self.compose_url = "https://synth.neurostore.xyz/api"
             self.store_url = "https://neurostore.xyz/api"
+            self.reference_studysets = {
+                "neurosynth": "68Gb9MzkXjVY",
+                "neuroquery": "4C7K8h3HYCFC",
+                "neurostore": "U4c28FTnfCzt",
+            }
         elif environment == "local":
             self.compose_url = "http://localhost:81/api"
             self.store_url = "http://localhost:80/api"
@@ -36,6 +41,11 @@ class Runner:
             # production
             self.compose_url = "https://compose.neurosynth.org/api"
             self.store_url = "https://neurostore.org/api"
+            self.reference_studysets = {
+                "neurosynth": "448WVKmQGVmY",
+                "neuroquery": "qdHkezFdn48D",
+                "neurostore": None,
+            }
 
         # Enter a context with an instance of the API client
         compose_configuration = neurosynth_compose_sdk.Configuration(
@@ -122,6 +132,54 @@ class Runner:
 
         # run key for running this particular meta-analysis
         self.nsc_key = meta_analysis["run_key"]
+
+    def apply_filter(self, studyset, annotation):
+        """Apply filter to studyset."""
+        column = self.cached_specification["filter"]
+        column_type = self.cached_annotation["note_keys"][f"{column}"]
+        contrast = self.cached_specification["contrast"]
+        if column_type == "bool" and not contrast:
+            analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{column}"]]
+            return studyset.slice(analyses=analysis_ids)
+        elif column_type == "bool" and contrast:
+            if contrast not in ["neurosynth", "neuroquery", "neurostore"]:
+                raise ValueError(
+                    f"Contrast must be one of ['neurosynth', 'neuroquery', 'neurostore']."
+                )
+            # get the reference studyset
+            references = requests.get(
+                f"{self.compose_url}/studyset-references/{self.reference_studysets[contrast]}nested=true"
+            ).json()
+            # select snapshot
+            studyset_snapshot_id = references["studysets"][0]["id"]
+            # get the studyset
+            studyset_snapshot = requests.get(
+                f"{self.compose_url}/studysets/{studyset_snapshot_id}"
+            ).json()
+
+            reference_studyset_dict = studyset_snapshot["snapshot"]
+            reference_studyset = Studyset(reference_studyset_dict)
+
+            # get study ids from studyset
+            study_ids = set([s.id for s in studyset.studies])
+
+            # reference study ids
+            reference_study_ids = set([s.id for s in reference_studyset.studies])
+
+            keep_study_ids = reference_study_ids - study_ids
+
+            # get analysis ids from reference studyset
+            analysis_ids = [
+                a.id for s in reference_studyset.studies for a in s.analyses if a.study.id in keep_study_ids
+            ]
+            filtered_reference_studyset = reference_studyset.slice(
+                analyses=analysis_ids
+            )
+
+        elif column_type == "string" and not contrast:
+            raise ValueError(
+                f"Contrast must be a string for column type {column_type}."
+            )
 
     def process_bundle(self):
         studyset = Studyset(self.cached_studyset)
