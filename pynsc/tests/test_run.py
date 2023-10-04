@@ -21,3 +21,10 @@ def test_run_workflow():
         environment="staging",
     )
     runner.run_workflow()
+
+
+def test_yifan_workflow():
+    runner = Runner(
+        meta_analysis_id="4WELjap2yCJm",
+    )
+    runner.run_workflow()

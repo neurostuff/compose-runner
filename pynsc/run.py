@@ -137,18 +137,20 @@ class Runner:
         """Apply filter to studyset."""
         column = self.cached_specification["filter"]
         column_type = self.cached_annotation["note_keys"][f"{column}"]
-        contrast = self.cached_specification["contrast"]
-        if column_type == "bool" and not contrast:
+        conditions = self.cached_specification["conditions"]
+        weights = self.cached_specification["weights"]
+        if column_type == "bool" and not conditions:
             analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{column}"]]
-            return studyset.slice(analyses=analysis_ids)
-        elif column_type == "bool" and contrast:
-            if contrast not in ["neurosynth", "neuroquery", "neurostore"]:
+            return studyset.slice(analyses=analysis_ids), None
+        elif column_type == "bool" and conditions:
+            if not set(conditions).issubset(set(["neurosynth", "neuroquery", "neurostore"])):
                 raise ValueError(
                     f"Contrast must be one of ['neurosynth', 'neuroquery', 'neurostore']."
                 )
+            condition = conditions[0]
             # get the reference studyset
             references = requests.get(
-                f"{self.compose_url}/studyset-references/{self.reference_studysets[contrast]}nested=true"
+                f"{self.compose_url}/studyset-references/{self.reference_studysets[condition]}nested=true"
             ).json()
             # select snapshot
             studyset_snapshot_id = references["studysets"][0]["id"]
@@ -172,14 +174,37 @@ class Runner:
             analysis_ids = [
                 a.id for s in reference_studyset.studies for a in s.analyses if a.study.id in keep_study_ids
             ]
-            filtered_reference_studyset = reference_studyset.slice(
+            second_studyset = reference_studyset.slice(
                 analyses=analysis_ids
             )
 
-        elif column_type == "string" and not contrast:
+            # apply the boolean filter
+            analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{column}"]]
+            first_studyset = studyset.slice(analyses=analysis_ids)
+
+            return first_studyset, second_studyset
+        elif column_type == "string" and not conditions:
             raise ValueError(
                 f"Contrast must be a string for column type {column_type}."
             )
+        elif column_type == "string" and conditions:
+            # have a selection between the two groups
+            condition_weights = {c: w for c, w in zip(conditions, weights)}
+            first_studyset = second_studyset = None
+            for condition, weight in condition_weights.items():
+                analysis_ids = [
+                    n.analysis.id for n in annotation.notes if n.note[f"{column}"] == condition
+                ]
+
+                if weight == 1:
+                    first_studyset = studyset.slice(analyses=analysis_ids)
+                elif weight == -1:
+                    second_studyset = studyset.slice(analyses=analysis_ids)
+
+            return first_studyset, second_studyset
+
+
+
 
     def process_bundle(self):
         studyset = Studyset(self.cached_studyset)
