@@ -3,10 +3,10 @@ from pathlib import Path
 
 import requests
 
-import neurosynth_compose_sdk
-from neurosynth_compose_sdk.api.compose_api import ComposeApi
-import neurostore_sdk
-from neurostore_sdk.api.store_api import StoreApi
+# import neurosynth_compose_sdk
+# from neurosynth_compose_sdk.api.compose_api import ComposeApi
+# import neurostore_sdk
+# from neurostore_sdk.api.store_api import StoreApi
 from nimare.workflows import CBMAWorkflow
 from nimare.nimads import Studyset, Annotation
 from nimare.meta.cbma import ALE
@@ -48,14 +48,14 @@ class Runner:
             }
 
         # Enter a context with an instance of the API client
-        compose_configuration = neurosynth_compose_sdk.Configuration(
-            host=self.compose_url
-        )
-        store_configuration = neurostore_sdk.Configuration(host=self.store_url)
-        compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
-        store_client = neurostore_sdk.ApiClient(store_configuration)
-        self.compose_api = ComposeApi(compose_client)
-        self.store_api = StoreApi(store_client)
+        # compose_configuration = neurosynth_compose_sdk.Configuration(
+        #     host=self.compose_url
+        # )
+        # store_configuration = neurostore_sdk.Configuration(host=self.store_url)
+        # compose_client = neurosynth_compose_sdk.ApiClient(compose_configuration)
+        # store_client = neurostore_sdk.ApiClient(store_configuration)
+        # self.compose_api = ComposeApi(compose_client)
+        # self.store_api = StoreApi(store_client)
 
         # initialize inputs
         self.cached_studyset = None
