@@ -7,7 +7,8 @@ import requests
 # from neurosynth_compose_sdk.api.compose_api import ComposeApi
 # import neurostore_sdk
 # from neurostore_sdk.api.store_api import StoreApi
-from nimare.workflows import CBMAWorkflow
+from nimare.workflows import CBMAWorkflow, PairwiseCBMAWorkflow
+from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
 from nimare.nimads import Studyset, Annotation
 from nimare.meta.cbma import ALE
 
@@ -61,7 +62,8 @@ class Runner:
         self.cached_studyset = None
         self.cached_annotation = None
         self.cached_specification = None
-        self.dataset = None
+        self.first_dataset = None
+        self.second_dataset = None
         self.estimator = None
         self.corrector = None
 
@@ -134,23 +136,89 @@ class Runner:
         self.nsc_key = meta_analysis["run_key"]
 
     def apply_filter(self, studyset, annotation):
-        """Apply filter to studyset."""
+        """
+        Apply filter to studyset.
+            Options:
+                - bool: filter by boolean column
+                  can be single or multiple conditions
+                - string: filter by string column
+                  can be single or multiple conditions
+                - database_studyset: use a reference studyset
+                  only useful for multiple conditions
+        """
         column = self.cached_specification["filter"]
         column_type = self.cached_annotation["note_keys"][f"{column}"]
-        conditions = self.cached_specification["conditions"]
+        conditions = self.cached_specification.get("conditions")
+        database_studyset = self.cached_specification.get("database_studyset")
         weights = self.cached_specification["weights"]
-        if column_type == "bool" and not conditions:
+        weight_conditions = {w: c for c, w in zip(conditions, weights)}
+        if column_type == "bool":
             analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{column}"]]
-            return studyset.slice(analyses=analysis_ids), None
-        elif column_type == "bool" and conditions:
-            if not set(conditions).issubset(set(["neurosynth", "neuroquery", "neurostore"])):
-                raise ValueError(
-                    f"Contrast must be one of ['neurosynth', 'neuroquery', 'neurostore']."
-                )
-            condition = conditions[0]
+
+        elif column_type == "string":
+            analysis_ids = [
+                n.analysis.id for n in annotation.notes if n.note[f"{column}"] == weight_conditions[1]
+            ]
+        else:
+            raise ValueError(f"Column type {column_type} not supported.")
+
+        first_studyset = studyset.slice(analyses=analysis_ids)
+        if len(conditions) == 1 and not database_studyset:
+            return first_studyset, None
+
+        elif len(conditions) == 2 and database_studyset:
+            raise ValueError("Cannot have multiple conditions and a database studyset.")
+
+        elif len(conditions) == 2 and not database_studyset:
+            second_analysis_ids = [
+                n.analysis.id for n in annotation.notes
+                if n.note[f"{column}"] == weight_conditions[-1]
+            ]
+            second_studyset = studyset.slice(analyses=second_analysis_ids)
+
+            return first_studyset, second_studyset
+        elif len(conditions) == 1 and database_studyset:
             # get the reference studyset
             references = requests.get(
-                f"{self.compose_url}/studyset-references/{self.reference_studysets[condition]}nested=true"
+                f"{self.compose_url}/studyset-references/{self.reference_studysets[database_studyset]}nested=true"
+            ).json()
+            # select snapshot
+            studyset_snapshot_id = references["studysets"][0]["id"]
+            # get the studyset
+            studyset_snapshot = requests.get(
+                f"{self.compose_url}/studysets/{studyset_snapshot_id}"
+            ).json()
+
+            reference_studyset_dict = studyset_snapshot["snapshot"]
+            reference_studyset = Studyset(reference_studyset_dict)
+
+            # get study ids from studyset
+            study_ids = set([s.id for s in studyset.studies])
+
+            # reference study ids
+            reference_study_ids = set([s.id for s in reference_studyset.studies])
+
+            keep_study_ids = reference_study_ids - study_ids
+
+            # get analysis ids from reference studyset
+            analysis_ids = [
+                a.id for s in reference_studyset.studies for a in s.analyses
+                if a.study.id in keep_study_ids
+            ]
+            second_studyset = reference_studyset.slice(
+                analyses=analysis_ids
+            )
+
+            return first_studyset, second_studyset
+
+        elif column_type == "bool" and database_studyset:
+            if database_studyset not in ["neurosynth", "neuroquery", "neurostore"]:
+                raise ValueError(
+                    f"Contrast must be one of ['neurosynth', 'neuroquery', 'neurostore']: received {database_studyset}"
+                )
+            # get the reference studyset
+            references = requests.get(
+                f"{self.compose_url}/studyset-references/{self.reference_studysets[database_studyset]}nested=true"
             ).json()
             # select snapshot
             studyset_snapshot_id = references["studysets"][0]["id"]
@@ -203,19 +271,18 @@ class Runner:
 
             return first_studyset, second_studyset
 
-
-
-
     def process_bundle(self):
         studyset = Studyset(self.cached_studyset)
         annotation = Annotation(self.cached_annotation, studyset)
-        include = self.cached_specification["filter"]
-        analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{include}"]]
-        filtered_studyset = studyset.slice(analyses=analysis_ids)
-        dataset = filtered_studyset.to_dataset()
+        first_studyset, second_studyset = self.apply_filter(studyset, annotation)
+        first_dataset = first_studyset.to_dataset()
+        second_dataset = second_studyset.to_dataset() if second_studyset is not None else None
         estimator, corrector = self.load_specification()
-        estimator, corrector = self.validate_specification(estimator, corrector, dataset)
-        self.dataset = dataset
+        estimator, corrector = self.validate_specification(
+            estimator, corrector, first_dataset, second_dataset
+        )
+        self.first_dataset = first_dataset
+        self.second_dataset = second_dataset
         self.estimator = estimator
         self.corrector = corrector
 
@@ -240,13 +307,22 @@ class Runner:
             raise ValueError(f"Could not create result for {self.meta_analysis_id}")
 
     def run_meta_analysis(self):
-        workflow = CBMAWorkflow(
-            estimator=self.estimator,
-            corrector=self.corrector,
-            diagnostics="focuscounter",
-            output_dir=self.result_dir,
-        )
-        self.meta_results = workflow.fit(self.dataset)
+        if self.second_dataset and isinstance(self.estimator, PairwiseCBMAEstimator):
+            workflow = PairwiseCBMAWorkflow(
+                estimator=self.estimator,
+                corrector=self.corrector,
+                diagnostics="focuscounter",
+                output_dir=self.result_dir,
+            )
+            self.meta_results = workflow.fit(self.first_dataset, self.second_dataset)
+        elif self.second_dataset is None and isinstance(self.estimator, CBMAEstimator):
+            workflow = CBMAWorkflow(
+                estimator=self.estimator,
+                corrector=self.corrector,
+                diagnostics="focuscounter",
+                output_dir=self.result_dir,
+            )
+            self.meta_results = workflow.fit(self.first_dataset, self.second_dataset)
 
     def upload_results(self):
         statistical_maps = [
@@ -316,7 +392,7 @@ class Runner:
 
         return estimator_init, corrector_init
 
-    def validate_specification(self, estimator, corrector, dataset):
+    def validate_specification(self, estimator, corrector, dataset, second_dataset=None):
         if isinstance(estimator, ALE) and estimator.kernel_transformer.sample_size is not None:
             if any(dataset.metadata['sample_sizes'].isnull()):
                 raise ValueError(
