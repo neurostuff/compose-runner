@@ -323,6 +323,10 @@ class Runner:
                 output_dir=self.result_dir,
             )
             self.meta_results = workflow.fit(self.first_dataset, self.second_dataset)
+        else:
+            raise ValueError(
+                f"Estimator {self.estimator} and datasets {self.first_dataset} and {self.second_dataset} are not compatible."
+            )
 
     def upload_results(self):
         statistical_maps = [
