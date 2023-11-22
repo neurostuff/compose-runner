@@ -9,7 +9,7 @@ from pynsc.run import run
 @click.option(
     "environment",
     "--environment",
-    type=click.Choice(['production', 'staging', 'local'], case_sensitive=False),
+    type=click.Choice(["production", "staging", "local"], case_sensitive=False),
     default="production",
     help="DEVELOPER USE ONLY Use another server instead of production server.",
 )
