@@ -189,6 +189,7 @@ class Runner:
             raise ValueError(f"Column type {column_type} not supported.")
 
         first_studyset = studyset.slice(analyses=analysis_ids)
+        first_studyset = first_studyset.combine_analyses()
 
         # if there is only one condition, return the first studyset
         if len(conditions) <= 1 and not database_studyset:
@@ -204,6 +205,7 @@ class Runner:
                 if n.note[f"{column}"] == weight_conditions[-1]
             ]
             second_studyset = studyset.slice(analyses=second_analysis_ids)
+            second_studyset = second_studyset.combine_analyses()
 
             return first_studyset, second_studyset
 
@@ -245,6 +247,7 @@ class Runner:
                 if s.id in keep_study_ids
             ]
             second_studyset = reference_studyset.slice(analyses=analysis_ids)
+            second_studyset = second_studyset.combine_analyses()
 
             return first_studyset, second_studyset
 
