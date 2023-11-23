@@ -13,7 +13,7 @@ import requests
 from nimare.workflows import CBMAWorkflow, PairwiseCBMAWorkflow
 from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
 from nimare.nimads import Studyset, Annotation
-from nimare.meta.cbma import ALE
+from nimare.meta.cbma import ALE, ALESubtraction, SCALE
 
 
 def gen_database_url(branch, database):
@@ -42,6 +42,7 @@ class Runner:
                 "neurosynth": gen_database_url("staging", "neurosynth"),
                 "neuroquery": gen_database_url("staging", "neuroquery"),
                 "neurostore": gen_database_url("staging", "neurostore"),
+                "neurostore_small": gen_database_url("staging", "neurostore_small"),
             }
         elif environment == "local":
             self.compose_url = "http://localhost:81/api"
@@ -50,6 +51,7 @@ class Runner:
                 "neurosynth": gen_database_url("staging", "neurosynth"),
                 "neuroquery": gen_database_url("staging", "neuroquery"),
                 "neurostore": gen_database_url("staging", "neurostore"),
+                "neurostore_small": gen_database_url("staging", "neurostore_small"),
             }
         else:
             # production
@@ -240,7 +242,7 @@ class Runner:
                 a.id
                 for s in reference_studyset.studies
                 for a in s.analyses
-                if a.study.id in keep_study_ids
+                if s.id in keep_study_ids
             ]
             second_studyset = reference_studyset.slice(analyses=analysis_ids)
 
@@ -377,7 +379,7 @@ class Runner:
         self, estimator, corrector, dataset, second_dataset=None
     ):
         if (
-            isinstance(estimator, ALE)
+            isinstance(estimator, (ALE, ALESubtraction, SCALE))
             and estimator.kernel_transformer.sample_size is not None
         ):
             if any(dataset.metadata["sample_sizes"].isnull()):
