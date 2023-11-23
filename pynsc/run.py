@@ -1,5 +1,8 @@
 from importlib import import_module
 from pathlib import Path
+import gzip
+import json
+import io
 
 import requests
 
@@ -7,17 +10,23 @@ import requests
 # from neurosynth_compose_sdk.api.compose_api import ComposeApi
 # import neurostore_sdk
 # from neurostore_sdk.api.store_api import StoreApi
-from nimare.workflows import CBMAWorkflow
+from nimare.workflows import CBMAWorkflow, PairwiseCBMAWorkflow
+from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
 from nimare.nimads import Studyset, Annotation
-from nimare.meta.cbma import ALE
+from nimare.meta.cbma import ALE, ALESubtraction, SCALE
+
+
+def gen_database_url(branch, database):
+    return f"https://github.com/neurostuff/neurostore_database/raw/{branch}/{database}.json.gz"
 
 
 class Runner:
     """Runner for executing and uploading a meta-analysis workflow."""
+
     def __init__(
         self,
         meta_analysis_id,
-        environment='production',
+        environment="production",
         result_dir=None,
         nsc_key=None,
         nv_key=None,
@@ -29,13 +38,30 @@ class Runner:
             # staging
             self.compose_url = "https://synth.neurostore.xyz/api"
             self.store_url = "https://neurostore.xyz/api"
+            self.reference_studysets = {
+                "neurosynth": gen_database_url("staging", "neurosynth"),
+                "neuroquery": gen_database_url("staging", "neuroquery"),
+                "neurostore": gen_database_url("staging", "neurostore"),
+                "neurostore_small": gen_database_url("staging", "neurostore_small"),
+            }
         elif environment == "local":
             self.compose_url = "http://localhost:81/api"
             self.store_url = "http://localhost:80/api"
+            self.reference_studysets = {
+                "neurosynth": gen_database_url("staging", "neurosynth"),
+                "neuroquery": gen_database_url("staging", "neuroquery"),
+                "neurostore": gen_database_url("staging", "neurostore"),
+                "neurostore_small": gen_database_url("staging", "neurostore_small"),
+            }
         else:
             # production
             self.compose_url = "https://compose.neurosynth.org/api"
             self.store_url = "https://neurostore.org/api"
+            self.reference_studysets = {
+                "neurosynth": gen_database_url("main", "neurosynth"),
+                "neuroquery": gen_database_url("main", "neuroquery"),
+                "neurostore": gen_database_url("main", "neurostore"),
+            }
 
         # Enter a context with an instance of the API client
         # compose_configuration = neurosynth_compose_sdk.Configuration(
@@ -51,7 +77,8 @@ class Runner:
         self.cached_studyset = None
         self.cached_annotation = None
         self.cached_specification = None
-        self.dataset = None
+        self.first_dataset = None
+        self.second_dataset = None
         self.estimator = None
         self.corrector = None
 
@@ -71,7 +98,9 @@ class Runner:
         # initialize outputs
         self.result_id = None
         self.meta_results = None  # the meta-analysis result output from nimare
-        self.results_object = None  # the result object represented on neurosynth compose
+        self.results_object = (
+            None  # the result object represented on neurosynth compose
+        )
 
     def run_workflow(self):
         self.download_bundle()
@@ -82,8 +111,8 @@ class Runner:
 
     def download_bundle(self):
         meta_analysis = requests.get(
-                f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true"
-            ).json()
+            f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true"
+        ).json()
         # meta_analysis = self.compose_api.meta_analyses_id_get(
         #     id=self.meta_analysis_id, nested=True
         # ).to_dict()  # does not currently return run_key
@@ -93,9 +122,7 @@ class Runner:
         if meta_analysis["studyset"]:
             studyset_dict = meta_analysis["studyset"]["snapshot"]
             self.cached_studyset = (
-                None
-                if studyset_dict is None
-                else studyset_dict.get("snapshot", None)
+                None if studyset_dict is None else studyset_dict.get("snapshot", None)
             )
         if meta_analysis["annotation"]:
             annotation_dict = meta_analysis["annotation"]["snapshot"]
@@ -123,16 +150,118 @@ class Runner:
         # run key for running this particular meta-analysis
         self.nsc_key = meta_analysis["run_key"]
 
+    def apply_filter(self, studyset, annotation):
+        """
+        Apply filter to studyset.
+            Options:
+                - bool: filter by boolean column
+                  can be single or multiple conditions
+                - string: filter by string column
+                  can be single or multiple conditions
+                - database_studyset: use a reference studyset
+                  only useful for multiple conditions
+        """
+        column = self.cached_specification["filter"]
+        column_type = self.cached_annotation["note_keys"][f"{column}"]
+        conditions = self.cached_specification.get("conditions", [])
+        database_studyset = self.cached_specification.get("database_studyset")
+        weights = self.cached_specification.get("weights", [])
+        weight_conditions = {w: c for c, w in zip(conditions, weights)}
+
+        if not (conditions or weights) and column_type != "boolean":
+            raise ValueError(
+                f"Column type {column_type} requires a conditions and weights."
+            )
+
+        # get analysis ids for the first studyset
+        if column_type == "boolean":
+            analysis_ids = [
+                n.analysis.id for n in annotation.notes if n.note[f"{column}"]
+            ]
+
+        elif column_type == "string":
+            analysis_ids = [
+                n.analysis.id
+                for n in annotation.notes
+                if n.note[f"{column}"] == weight_conditions[1]
+            ]
+        else:
+            raise ValueError(f"Column type {column_type} not supported.")
+
+        first_studyset = studyset.slice(analyses=analysis_ids)
+
+        # if there is only one condition, return the first studyset
+        if len(conditions) <= 1 and not database_studyset:
+            return first_studyset, None
+
+        elif len(conditions) == 2 and database_studyset:
+            raise ValueError("Cannot have multiple conditions and a database studyset.")
+
+        elif len(conditions) == 2 and not database_studyset:
+            second_analysis_ids = [
+                n.analysis.id
+                for n in annotation.notes
+                if n.note[f"{column}"] == weight_conditions[-1]
+            ]
+            second_studyset = studyset.slice(analyses=second_analysis_ids)
+
+            return first_studyset, second_studyset
+
+        elif len(conditions) <= 1 and database_studyset:
+            # Download the gzip file
+            response = requests.get(self.reference_studysets[database_studyset])
+
+            # Check if the request was successful
+            if response.status_code != 200:
+                raise ValueError(
+                    f"Could not download reference studyset {database_studyset}."
+                )
+            # Wrap the content of the response in a BytesIO object
+            gzip_content = io.BytesIO(response.content)
+
+            # Decompress the gzip content
+            with gzip.GzipFile(fileobj=gzip_content, mode="rb") as gz_file:
+                # Read and decode the JSON data
+                json_data = gz_file.read().decode("utf-8")
+
+                # Load the JSON data into a dictionary
+                reference_studyset_dict = json.loads(json_data)
+
+            reference_studyset = Studyset(reference_studyset_dict)
+
+            # get study ids from studyset
+            study_ids = set([s.id for s in studyset.studies])
+
+            # reference study ids
+            reference_study_ids = set([s.id for s in reference_studyset.studies])
+
+            keep_study_ids = reference_study_ids - study_ids
+
+            # get analysis ids from reference studyset
+            analysis_ids = [
+                a.id
+                for s in reference_studyset.studies
+                for a in s.analyses
+                if s.id in keep_study_ids
+            ]
+            second_studyset = reference_studyset.slice(analyses=analysis_ids)
+
+            return first_studyset, second_studyset
+
     def process_bundle(self):
         studyset = Studyset(self.cached_studyset)
         annotation = Annotation(self.cached_annotation, studyset)
-        include = self.cached_specification["filter"]
-        analysis_ids = [n.analysis.id for n in annotation.notes if n.note[f"{include}"]]
-        filtered_studyset = studyset.slice(analyses=analysis_ids)
-        dataset = filtered_studyset.to_dataset()
+        first_studyset, second_studyset = self.apply_filter(studyset, annotation)
+        first_dataset = first_studyset.to_dataset()
+        second_dataset = (
+            second_studyset.to_dataset() if second_studyset is not None else None
+        )
         estimator, corrector = self.load_specification()
-        estimator, corrector = self.validate_specification(estimator, corrector, dataset)
-        self.dataset = dataset
+        estimator, corrector = self.validate_specification(
+            estimator, corrector, first_dataset, second_dataset
+        )
+        self.first_dataset = first_dataset
+        self.second_dataset = second_dataset
         self.estimator = estimator
         self.corrector = corrector
 
@@ -157,13 +286,26 @@ class Runner:
             raise ValueError(f"Could not create result for {self.meta_analysis_id}")
 
     def run_meta_analysis(self):
-        workflow = CBMAWorkflow(
-            estimator=self.estimator,
-            corrector=self.corrector,
-            diagnostics="focuscounter",
-            output_dir=self.result_dir,
-        )
-        self.meta_results = workflow.fit(self.dataset)
+        if self.second_dataset and isinstance(self.estimator, PairwiseCBMAEstimator):
+            workflow = PairwiseCBMAWorkflow(
+                estimator=self.estimator,
+                corrector=self.corrector,
+                diagnostics="focuscounter",
+                output_dir=self.result_dir,
+            )
+            self.meta_results = workflow.fit(self.first_dataset, self.second_dataset)
+        elif self.second_dataset is None and isinstance(self.estimator, CBMAEstimator):
+            workflow = CBMAWorkflow(
+                estimator=self.estimator,
+                corrector=self.corrector,
+                diagnostics="focuscounter",
+                output_dir=self.result_dir,
+            )
+            self.meta_results = workflow.fit(self.first_dataset, self.second_dataset)
+        else:
+            raise ValueError(
+                f"Estimator {self.estimator} and datasets {self.first_dataset} and {self.second_dataset} are not compatible."
+            )
 
     def upload_results(self):
         statistical_maps = [
@@ -233,16 +375,27 @@ class Runner:
 
         return estimator_init, corrector_init
 
-    def validate_specification(self, estimator, corrector, dataset):
-        if isinstance(estimator, ALE) and estimator.kernel_transformer.sample_size is not None:
-            if any(dataset.metadata['sample_sizes'].isnull()):
+    def validate_specification(
+        self, estimator, corrector, dataset, second_dataset=None
+    ):
+        if (
+            isinstance(estimator, (ALE, ALESubtraction, SCALE))
+            and estimator.kernel_transformer.sample_size is not None
+        ):
+            if any(dataset.metadata["sample_sizes"].isnull()):
                 raise ValueError(
                     "Sample size is required for ALE with sample size weighting."
                 )
         return estimator, corrector
 
 
-def run(meta_analysis_id, environment='production', result_dir=None, nsc_key=None, nv_key=None):
+def run(
+    meta_analysis_id,
+    environment="production",
+    result_dir=None,
+    nsc_key=None,
+    nv_key=None,
+):
     runner = Runner(
         meta_analysis_id=meta_analysis_id,
         environment=environment,
@@ -252,8 +405,8 @@ def run(meta_analysis_id, environment='production', result_dir=None, nsc_key=Non
     )
 
     runner.run_workflow()
-    url = '/'.join(
-        [runner.compose_url.rstrip('/api'), "meta-analyses", meta_analysis_id]
+    url = "/".join(
+        [runner.compose_url.rstrip("/api"), "meta-analyses", meta_analysis_id]
     )
 
     return url, runner.meta_results
