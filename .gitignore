@@ -1,3 +1,4 @@
 .nsc
 .runner
 .pytest_cache
+_version.py
