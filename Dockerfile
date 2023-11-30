@@ -4,14 +4,14 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY setup.cfg .
-
 COPY pyproject.toml .
 
+# just install dependencies (less likely to change)
 RUN pip install .
 
 COPY . .
 
+# install the package (more likely to change, leverage caching!)
 RUN pip install .
 
 ENTRYPOINT ["compose-run"]
