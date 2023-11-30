@@ -102,12 +102,13 @@ class Runner:
             None  # the result object represented on neurosynth compose
         )
 
-    def run_workflow(self):
+    def run_workflow(self, no_upload=False):
         self.download_bundle()
         self.process_bundle()
         self.create_result_object()
         self.run_meta_analysis()
-        self.upload_results()
+        if not no_upload:
+            self.upload_results()
 
     def download_bundle(self):
         meta_analysis = requests.get(
@@ -398,6 +399,7 @@ def run(
     result_dir=None,
     nsc_key=None,
     nv_key=None,
+    no_upload=False,
 ):
     runner = Runner(
         meta_analysis_id=meta_analysis_id,
@@ -407,7 +409,11 @@ def run(
         nv_key=nv_key,
     )
 
-    runner.run_workflow()
+    runner.run_workflow(no_upload=no_upload)
+
+    if no_upload:
+        return None, runner.meta_results
+
     url = "/".join(
         [runner.compose_url.rstrip("/api"), "meta-analyses", meta_analysis_id]
     )
