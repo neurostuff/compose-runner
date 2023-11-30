@@ -4,10 +4,10 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
+COPY requirements.txt .
 
 # just install dependencies (less likely to change)
-RUN pip install .
+RUN pip install -r requirements.txt
 
 COPY . .
 
