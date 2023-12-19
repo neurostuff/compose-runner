@@ -105,9 +105,9 @@ class Runner:
     def run_workflow(self, no_upload=False):
         self.download_bundle()
         self.process_bundle()
-        self.create_result_object()
         self.run_meta_analysis()
         if not no_upload:
+            self.create_result_object()
             self.upload_results()
 
     def download_bundle(self):
