@@ -1,6 +1,6 @@
 import click
 
-from pynsc.run import run
+from compose_runner.run import run
 
 
 @click.command()

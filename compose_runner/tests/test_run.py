@@ -1,5 +1,5 @@
 import pytest
-from pynsc.run import Runner
+from compose_runner.run import Runner
 
 
 @pytest.mark.vcr(record_mode="once")

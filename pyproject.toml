@@ -17,7 +17,7 @@ dynamic = ["version"]
 dependencies = ["nimare==0.2.0", "click"]
 
 [project.urls]
-Repository = "https://github.com/neurostuff/nsc-runner"
+Repository = "https://github.com/neurostuff/compose-runner"
 
 [project.optional-dependencies]
 tests = [
@@ -27,18 +27,17 @@ tests = [
 ]
 
 [project.scripts]
-compose-run = "pynsc.cli:cli"
+compose-run = "compose_runner.cli:cli"
 
 [tool.hatch.version]
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "pynsc/_version.py"
+version-file = "compose_runner/_version.py"
 
 [tool.hatch.build]
 exclude = [
   "/.*",
-  "pynsc/tests",
 ]
 
 [tool.flake8]
