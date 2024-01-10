@@ -54,3 +54,11 @@ def test_run_string_group_comparison_workflow():
 #         meta_analysis_id="4WELjap2yCJm",
 #     )
 #     runner.run_workflow()
+
+
+# @pytest.mark.vcr(record_mode="once")
+# def test_mkdachis_comparison_workflow():
+#     runner = Runner(
+#         meta_analysis_id="6Grzwzs3t7YB",
+#     )
+#     runner.run_workflow()
