@@ -232,6 +232,7 @@ class Runner:
 
             reference_studyset = Studyset(reference_studyset_dict)
 
+            del reference_studyset_dict
             # get study ids from studyset
             study_ids = set([s.id for s in studyset.studies])
 
