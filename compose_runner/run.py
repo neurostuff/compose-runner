@@ -111,9 +111,16 @@ class Runner:
             self.upload_results()
 
     def download_bundle(self):
-        meta_analysis = requests.get(
+        meta_analysis_resp = requests.get(
             f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true"
-        ).json()
+        )
+        try:
+            meta_analysis_resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            raise requests.exceptions.HTTPError(
+                f"Could not download meta-analysis {self.meta_analysis_id}"
+            ) from e
+        meta_analysis = meta_analysis_resp.json()
         # meta_analysis = self.compose_api.meta_analyses_id_get(
         #     id=self.meta_analysis_id, nested=True
         # ).to_dict()  # does not currently return run_key
@@ -134,15 +141,34 @@ class Runner:
             )
         # if either are not cached, download them from neurostore
         if self.cached_studyset is None or self.cached_annotation is None:
-            self.cached_studyset = requests.get(
+            cached_studyset_resp = requests.get(
                 (
                     f"{self.store_url}/studysets/"
                     f"{meta_analysis['studyset']['neurostore_id']}?nested=true"
                 )
-            ).json()
-            self.cached_annotation = requests.get(
-                f"{self.store_url}/annotations/{meta_analysis['annotation']['neurostore_id']}"
-            ).json()
+            )
+            try:
+                cached_studyset_resp.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                raise requests.exceptions.HTTPError(
+                    f"Could not download studyset {meta_analysis['studyset']['neurostore_id']}"
+                ) from e
+            self.cached_studyset = cached_studyset_resp.json()
+
+            cached_annotation_resp = requests.get(
+                (
+                    f"{self.store_url}/annotations/"
+                    f"{meta_analysis['annotation']['neurostore_id']}?nested=true"
+                )
+            )
+            try:
+                cached_annotation_resp.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                raise requests.exceptions.HTTPError(
+                    f"Could not download annotation {meta_analysis['annotation']['neurostore_id']}"
+                ) from e
+
+            self.cached_annotation = cached_annotation_resp.json()
             # set cached to false
             self.cached = False
         # retrieve specification
@@ -214,11 +240,13 @@ class Runner:
             # Download the gzip file
             response = requests.get(self.reference_studysets[database_studyset])
 
-            # Check if the request was successful
-            if response.status_code != 200:
-                raise ValueError(
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                raise requests.exceptions.HTTPError(
                     f"Could not download reference studyset {database_studyset}."
-                )
+                ) from e
+
             # Wrap the content of the response in a BytesIO object
             gzip_content = io.BytesIO(response.content)
 
