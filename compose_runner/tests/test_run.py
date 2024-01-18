@@ -20,7 +20,7 @@ def test_run_workflow():
         meta_analysis_id="3opENJpHxRsH",
         environment="staging",
     )
-    runner.run_workflow()
+    runner.run_workflow(n_cores=2)
 
 
 @pytest.mark.vcr(record_mode="once")

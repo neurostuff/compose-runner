@@ -102,13 +102,14 @@ class Runner:
             None  # the result object represented on neurosynth compose
         )
 
-    def run_workflow(self, no_upload=False):
+    def run_workflow(self, no_upload=False, n_cores=None):
         self.download_bundle()
-        self.process_bundle()
+        self.process_bundle(n_cores=n_cores)
         self.run_meta_analysis()
         if not no_upload:
             self.create_result_object()
             self.upload_results()
+        
 
     def download_bundle(self):
         meta_analysis = requests.get(
@@ -253,7 +254,7 @@ class Runner:
 
             return first_studyset, second_studyset
 
-    def process_bundle(self):
+    def process_bundle(self, n_cores=None):
         studyset = Studyset(self.cached_studyset)
         annotation = Annotation(self.cached_annotation, studyset)
         first_studyset, second_studyset = self.apply_filter(studyset, annotation)
@@ -261,7 +262,7 @@ class Runner:
         second_dataset = (
             second_studyset.to_dataset() if second_studyset is not None else None
         )
-        estimator, corrector = self.load_specification()
+        estimator, corrector = self.load_specification(n_cores=n_cores)
         estimator, corrector = self.validate_specification(
             estimator, corrector, first_dataset, second_dataset
         )
@@ -348,33 +349,31 @@ class Runner:
             headers=headers,
         )
 
-    def load_specification(self):
+    def load_specification(self, n_cores=None):
         """Returns function to run analysis on dataset."""
         spec = self.cached_specification
         est_mod = import_module(".".join(["nimare", "meta", spec["type"].lower()]))
         estimator = getattr(est_mod, spec["estimator"]["type"])
-        if spec["estimator"].get("args"):
-            est_args = {**spec["estimator"]["args"]}
-            if est_args.get("**kwargs") is not None:
-                for k, v in est_args["**kwargs"].items():
-                    est_args[k] = v
-                del est_args["**kwargs"]
-            estimator_init = estimator(**est_args)
-        else:
-            estimator_init = estimator()
+        est_args = {**spec["estimator"]["args"]} if spec["estimator"].get("args") else {}
+        if n_cores is not None:
+            est_args["n_cores"] = n_cores
+        if est_args.get("**kwargs") is not None:
+            for k, v in est_args["**kwargs"].items():
+                est_args[k] = v
+            del est_args["**kwargs"]
+        estimator_init = estimator(**est_args)
 
         if spec.get("corrector"):
             cor_mod = import_module(".".join(["nimare", "correct"]))
             corrector = getattr(cor_mod, spec["corrector"]["type"])
-            if spec["corrector"].get("args"):
-                cor_args = {**spec["corrector"]["args"]}
-                if cor_args.get("**kwargs") is not None:
-                    for k, v in cor_args["**kwargs"].items():
-                        cor_args[k] = v
-                    del cor_args["**kwargs"]
-                corrector_init = corrector(**cor_args)
-            else:
-                corrector_init = corrector()
+            cor_args = {**spec["corrector"]["args"]} if spec["corrector"].get("args") else {}
+            if n_cores is not None:
+                cor_args["n_cores"] = n_cores
+            if cor_args.get("**kwargs") is not None:
+                for k, v in cor_args["**kwargs"].items():
+                    cor_args[k] = v
+                del cor_args["**kwargs"]
+            corrector_init = corrector(**cor_args)
         else:
             corrector_init = None
 
@@ -401,6 +400,7 @@ def run(
     nsc_key=None,
     nv_key=None,
     no_upload=False,
+    n_cores=None,
 ):
     runner = Runner(
         meta_analysis_id=meta_analysis_id,
@@ -410,7 +410,7 @@ def run(
         nv_key=nv_key,
     )
 
-    runner.run_workflow(no_upload=no_upload)
+    runner.run_workflow(no_upload=no_upload, n_cores=n_cores)
 
     if no_upload:
         return None, runner.meta_results
