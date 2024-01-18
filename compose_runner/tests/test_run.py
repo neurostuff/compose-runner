@@ -1,5 +1,18 @@
 import pytest
+from requests.exceptions import HTTPError
+
 from compose_runner.run import Runner
+
+
+@pytest.mark.vcr(record_mode="once")
+def test_incorrect_id():
+    runner = Runner(
+        meta_analysis_id="made_up_id",
+        environment="staging",
+    )
+
+    with pytest.raises(HTTPError):
+        runner.run_workflow()
 
 
 @pytest.mark.vcr(record_mode="once")
