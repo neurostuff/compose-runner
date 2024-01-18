@@ -356,7 +356,7 @@ class Runner:
                 open(self.result_dir / (f + ".tsv"), "rb"),
             )
             for f, df in self.meta_results.tables.items()
-            if "clust" in f and not df.empty
+            if f.endswith("clust") and not df.empty
         ]
 
         diagnostic_tables = [
@@ -365,7 +365,7 @@ class Runner:
                 open(self.result_dir / (f + ".tsv"), "rb"),
             )
             for f, df in self.meta_results.tables.items()
-            if "clust" not in f and df is not None
+            if not f.endswith("clust") and df is not None
         ]
         files = statistical_maps + cluster_tables + diagnostic_tables
 
