@@ -109,7 +109,7 @@ class Runner:
         if not no_upload:
             self.create_result_object()
             self.upload_results()
-        
+
 
     def download_bundle(self):
         meta_analysis_resp = requests.get(
@@ -385,6 +385,8 @@ class Runner:
         est_args = {**spec["estimator"]["args"]} if spec["estimator"].get("args") else {}
         if n_cores is not None:
             est_args["n_cores"] = n_cores
+        if est_args.get("n_iters") is not None:
+            est_args["n_iters"] = int(est_args["n_iters"])
         if est_args.get("**kwargs") is not None:
             for k, v in est_args["**kwargs"].items():
                 est_args[k] = v
@@ -397,6 +399,8 @@ class Runner:
             cor_args = {**spec["corrector"]["args"]} if spec["corrector"].get("args") else {}
             if n_cores is not None:
                 cor_args["n_cores"] = n_cores
+            if cor_args.get("n_iters") is not None:
+                cor_args["n_iters"] = int(cor_args["n_iters"])
             if cor_args.get("**kwargs") is not None:
                 for k, v in cor_args["**kwargs"].items():
                     cor_args[k] = v
