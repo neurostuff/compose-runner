@@ -159,7 +159,7 @@ class Runner:
             cached_annotation_resp = requests.get(
                 (
                     f"{self.store_url}/annotations/"
-                    f"{meta_analysis['annotation']['neurostore_id']}?nested=true"
+                    f"{meta_analysis['annotation']['neurostore_id']}"
                 )
             )
             try:
