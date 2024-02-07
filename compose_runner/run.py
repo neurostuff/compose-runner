@@ -10,6 +10,7 @@ import requests
 # from neurosynth_compose_sdk.api.compose_api import ComposeApi
 # import neurostore_sdk
 # from neurostore_sdk.api.store_api import StoreApi
+from nimare.correct import FDRCorrector
 from nimare.workflows import CBMAWorkflow, PairwiseCBMAWorkflow
 from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
 from nimare.nimads import Studyset, Annotation
@@ -109,7 +110,6 @@ class Runner:
         if not no_upload:
             self.create_result_object()
             self.upload_results()
-
 
     def download_bundle(self):
         meta_analysis_resp = requests.get(
@@ -397,9 +397,9 @@ class Runner:
             cor_mod = import_module(".".join(["nimare", "correct"]))
             corrector = getattr(cor_mod, spec["corrector"]["type"])
             cor_args = {**spec["corrector"]["args"]} if spec["corrector"].get("args") else {}
-            if n_cores is not None:
+            if n_cores is not None and corrector is not FDRCorrector:
                 cor_args["n_cores"] = n_cores
-            if cor_args.get("n_iters") is not None:
+            if cor_args.get("n_iters") is not None and corrector is not FDRCorrector:
                 cor_args["n_iters"] = int(cor_args["n_iters"])
             if cor_args.get("**kwargs") is not None:
                 for k, v in cor_args["**kwargs"].items():
