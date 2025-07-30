@@ -4,10 +4,14 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY pyproject.toml .
+COPY compose_runner/_version.py compose_runner/_version.py
 
-# just install dependencies (less likely to change)
-RUN pip install -r requirements.txt
+# install build backend and hatch
+RUN pip install --upgrade pip && pip install hatchling hatch-vcs hatch
+
+# export dependencies using hatch and install with pip
+RUN hatch dep show requirements > requirements.txt && pip install -r requirements.txt
 
 COPY . .
 
