@@ -1,5 +1,5 @@
+import compose_runner.sentry
 import click
-
 from compose_runner.run import run
 
 
