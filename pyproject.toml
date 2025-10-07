@@ -14,7 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dynamic = ["version"]
-dependencies = ["nimare", "click", "nilearn", "sentry-sdk"]
+dependencies = ["nimare", "click", "sentry-sdk"]
 
 [project.urls]
 Repository = "https://github.com/neurostuff/compose-runner"
