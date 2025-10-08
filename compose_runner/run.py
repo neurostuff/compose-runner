@@ -205,14 +205,14 @@ class Runner:
         # get analysis ids for the first studyset
         if column_type == "boolean":
             analysis_ids = [
-                n.analysis.id for n in annotation.notes if n.note[f"{column}"]
+                n.analysis.id for n in annotation.notes if n.note.get(f"{column}")
             ]
 
         elif column_type == "string":
             analysis_ids = [
                 n.analysis.id
                 for n in annotation.notes
-                if n.note[f"{column}"] == weight_conditions[1]
+                if n.note.get(f"{column}", "") == weight_conditions[1]
             ]
         else:
             raise ValueError(f"Column type {column_type} not supported.")
@@ -231,7 +231,7 @@ class Runner:
             second_analysis_ids = [
                 n.analysis.id
                 for n in annotation.notes
-                if n.note[f"{column}"] == weight_conditions[-1]
+                if n.note.get(f"{column}") == weight_conditions[-1]
             ]
             second_studyset = studyset.slice(analyses=second_analysis_ids)
             second_studyset = second_studyset.combine_analyses()
