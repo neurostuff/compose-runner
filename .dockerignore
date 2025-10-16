@@ -1,4 +1,34 @@
-.runner
+# Local/virtual environments
+.venv
 .nsc
+.env
+
+# Python caches
+__pycache__/
+*.py[cod]
 .pytest_cache
-compose_runner/tests/cassettes
+.mypy_cache
+.tox
+
+# Build and distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# CDK/Docker outputs
+cdk.out/
+infra/cdk/cdk.out/
+infra/**/cdk.out/
+infra/cdk/.venv/
+
+# Tooling and IDE metadata
+.idea/
+.vscode/
+.DS_Store
+
+# Test data/results not needed in Lambda image
+results/
+compose_runner/tests/
+
+# Node modules (if present)
+node_modules/

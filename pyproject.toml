@@ -14,7 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dynamic = ["version"]
-dependencies = ["nimare", "click", "sentry-sdk"]
+dependencies = ["nimare", "click", "sentry-sdk", "numpy"]
 
 [project.urls]
 Repository = "https://github.com/neurostuff/compose-runner"
@@ -24,6 +24,9 @@ tests = [
     "pytest",
     "pytest-recording",
     "vcrpy",
+]
+aws = [
+    "boto3",
 ]
 
 [project.scripts]
@@ -42,4 +45,3 @@ exclude = [
 
 [tool.flake8]
 max-line-length = "99"
-

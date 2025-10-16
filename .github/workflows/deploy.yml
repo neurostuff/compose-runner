@@ -1,0 +1,76 @@
+name: Deploy Compose Runner Stack
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install CDK dependencies
+        working-directory: infra/cdk
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy CDK stack
+        working-directory: infra/cdk
+        env:
+          RESULTS_PREFIX: compose-runner/results
+          RUN_MEMORY_SIZE: 3008
+          RUN_TIMEOUT_SECONDS: 900
+        run: |
+          source .venv/bin/activate
+          VERSION=${GITHUB_REF_NAME}
+          cdk deploy \
+            --require-approval never \
+            --outputs-file cdk-outputs.json \
+            -c composeRunnerVersion=${VERSION} \
+            -c resultsPrefix=${RESULTS_PREFIX} \
+            -c runMemorySize=${RUN_MEMORY_SIZE} \
+            -c runTimeoutSeconds=${RUN_TIMEOUT_SECONDS}
+
+      - name: Smoke test run endpoint
+        working-directory: infra/cdk
+        run: |
+          RUN_URL=$(jq -r '.ComposeRunnerStack.ComposeRunnerFunctionUrl' cdk-outputs.json)
+          if [ -z "$RUN_URL" ] || [ "$RUN_URL" = "null" ]; then
+            echo "Run Function URL not found in outputs"
+            exit 1
+          fi
+          body='{"meta_analysis_id": "pFGy6g3LRo9x", "environment": "production", "no_upload": true}'
+          response=$(curl -s -w "\n%{http_code}" -X POST "$RUN_URL" -H "Content-Type: application/json" -d "$body")
+          http_code=$(echo "$response" | tail -n1)
+          json_body=$(echo "$response" | head -n1)
+          echo "$json_body" > smoke_run.json
+          echo "Status code: $http_code"
+          if [ "$http_code" != "200" ]; then
+            echo "Run endpoint failed: $json_body"
+            exit 1
+          fi
+          status=$(jq -r '.status' smoke_run.json)
+          if [ "$status" != "SUCCEEDED" ]; then
+            echo "Run endpoint returned non-success status: $json_body"
+            exit 1
+          fi
