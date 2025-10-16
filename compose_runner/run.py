@@ -1,9 +1,10 @@
 import compose_runner.sentry
-from importlib import import_module
-from pathlib import Path
 import gzip
 import json
 import io
+import pickle
+from importlib import import_module
+from pathlib import Path
 
 import requests
 
@@ -341,6 +342,7 @@ class Runner:
             raise ValueError(
                 f"Estimator {self.estimator} and datasets {self.first_dataset} and {self.second_dataset} are not compatible."
             )
+        self._persist_meta_results()
 
     def upload_results(self):
         statistical_maps = [
@@ -424,6 +426,15 @@ class Runner:
                     "Sample size is required for ALE with sample size weighting."
                 )
         return estimator, corrector
+
+    def _persist_meta_results(self):
+        """Persist meta-analysis results locally for downstream access."""
+        if self.meta_results is None:
+            return
+        self.result_dir.mkdir(parents=True, exist_ok=True)
+        meta_results_path = self.result_dir / "meta_results.pkl"
+        with meta_results_path.open("wb") as meta_file:
+            pickle.dump(self.meta_results, meta_file, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def run(
