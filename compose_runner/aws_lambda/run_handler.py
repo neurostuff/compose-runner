@@ -18,7 +18,7 @@ from compose_runner.run import run as run_compose
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-_S3_CLIENT = boto3.client("s3")
+_S3_CLIENT = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 
 def _is_http_event(event: Any) -> bool:

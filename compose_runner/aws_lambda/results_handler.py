@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 import boto3
 
-_S3 = boto3.client("s3")
+_S3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
 RESULTS_PREFIX_ENV = "RESULTS_PREFIX"
