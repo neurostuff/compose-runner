@@ -2,3 +2,4 @@
 .runner
 .pytest_cache
 _version.py
+__pycache__

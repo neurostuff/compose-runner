@@ -87,6 +87,16 @@ def test_log_poll_handler(monkeypatch):
     assert result["events"][0]["message"] == events_payload[0]["message"]
 
 
+def test_log_poll_handler_http_missing_job_id(monkeypatch):
+    monkeypatch.setenv("RUNNER_LOG_GROUP", "/aws/lambda/test")
+    http_event = _make_http_event({})
+    response = log_poll_handler.handler(http_event, DummyContext())
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 400
+    assert body["status"] == "FAILED"
+    assert "job_id" in body["error"]
+
+
 def test_results_handler(monkeypatch):
     objects = [
         {"Key": "prefix/id/file1.nii.gz", "Size": 10, "LastModified": results_handler.datetime.now()}
@@ -109,8 +119,20 @@ def test_results_handler(monkeypatch):
     monkeypatch.setenv("RESULTS_PREFIX", "prefix")
     monkeypatch.setattr(results_handler, "_S3", FakeS3())
 
-    event = {"job_id": "id"}
-    result = results_handler.handler(event, DummyContext())
-    assert result["job_id"] == "id"
-    assert result["artifacts"][0]["url"] == "https://signed/url"
-    assert result["artifacts"][0]["filename"] == "file1.nii.gz"
+    event = _make_http_event({"job_id": "id"})
+    response = results_handler.handler(event, DummyContext())
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 200
+    assert body["job_id"] == "id"
+    assert body["artifacts"][0]["url"] == "https://signed/url"
+    assert body["artifacts"][0]["filename"] == "file1.nii.gz"
+
+
+def test_results_handler_missing_job_id(monkeypatch):
+    monkeypatch.setenv("RESULTS_BUCKET", "bucket")
+    event = _make_http_event({})
+    response = results_handler.handler(event, DummyContext())
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 400
+    assert body["status"] == "FAILED"
+    assert "job_id" in body["error"]
