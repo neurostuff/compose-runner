@@ -60,7 +60,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     params: Dict[str, Any] = {
         "logGroupName": log_group,
-        "filterPattern": f'{{"job_id": "{job_id}"}}',
+        "filterPattern": f'"{job_id}"',
         "startTime": int(start_time),
     }
     if end_time is not None:
