@@ -40,7 +40,12 @@ class ComposeRunnerStack(Stack):
         task_cpu = int(self.node.try_get_context("taskCpu") or 4096)
         task_memory_mib = int(self.node.try_get_context("taskMemoryMiB") or 30720)
         task_ephemeral_storage_gib = int(self.node.try_get_context("taskEphemeralStorageGiB") or 21)
+        task_cpu_large = int(self.node.try_get_context("taskCpuLarge") or 16384)
+        task_memory_large_mib = int(self.node.try_get_context("taskMemoryLargeMiB") or 32768)
         state_machine_timeout_seconds = int(self.node.try_get_context("stateMachineTimeoutSeconds") or 7200)
+
+        if task_cpu_large >= 16384 and task_memory_large_mib < 32768:
+            raise ValueError("taskMemoryLargeMiB must be at least 32768 MiB for 16 vCPU tasks.")
 
         project_root = Path(__file__).resolve().parents[3]
         project_version = self.node.try_get_context("composeRunnerVersion")
@@ -121,6 +126,20 @@ class ComposeRunnerStack(Stack):
             ephemeral_storage_gib=task_ephemeral_storage_gib,
         )
 
+        task_definition_large = ecs.FargateTaskDefinition(
+            self,
+            "ComposeRunnerLargeTaskDefinition",
+            cpu=task_cpu_large,
+            memory_limit_mib=task_memory_large_mib,
+            ephemeral_storage_gib=task_ephemeral_storage_gib,
+        )
+
+        container_environment = {
+            "RESULTS_BUCKET": results_bucket.bucket_name,
+            "RESULTS_PREFIX": results_prefix,
+            "DELETE_TMP": "true",
+        }
+
         container = task_definition.add_container(
             "ComposeRunnerContainer",
             image=ecs.ContainerImage.from_docker_image_asset(fargate_asset),
@@ -129,16 +148,46 @@ class ComposeRunnerStack(Stack):
                 log_group=task_log_group,
                 stream_prefix="compose-runner",
             ),
-            environment={
-                "RESULTS_BUCKET": results_bucket.bucket_name,
-                "RESULTS_PREFIX": results_prefix,
-                "DELETE_TMP": "true",
-            },
+            environment=container_environment,
+        )
+
+        container_large = task_definition_large.add_container(
+            "ComposeRunnerLargeContainer",
+            image=ecs.ContainerImage.from_docker_image_asset(fargate_asset),
+            entry_point=["python", "-m", "compose_runner.ecs_task"],
+            logging=ecs.LogDriver.aws_logs(
+                log_group=task_log_group,
+                stream_prefix="compose-runner",
+            ),
+            environment=container_environment,
         )
 
         results_bucket.grant_read_write(task_definition.task_role)
+        results_bucket.grant_read_write(task_definition_large.task_role)
 
-        run_task = tasks.EcsRunTask(
+        container_env_overrides = [
+            tasks.TaskEnvironmentVariable(
+                name="ARTIFACT_PREFIX", value=sfn.JsonPath.string_at("$.artifact_prefix")
+            ),
+            tasks.TaskEnvironmentVariable(
+                name="META_ANALYSIS_ID", value=sfn.JsonPath.string_at("$.meta_analysis_id")
+            ),
+            tasks.TaskEnvironmentVariable(
+                name="ENVIRONMENT", value=sfn.JsonPath.string_at("$.environment")
+            ),
+            tasks.TaskEnvironmentVariable(name="NSC_KEY", value=sfn.JsonPath.string_at("$.nsc_key")),
+            tasks.TaskEnvironmentVariable(name="NV_KEY", value=sfn.JsonPath.string_at("$.nv_key")),
+            tasks.TaskEnvironmentVariable(name="NO_UPLOAD", value=sfn.JsonPath.string_at("$.no_upload")),
+            tasks.TaskEnvironmentVariable(name="N_CORES", value=sfn.JsonPath.string_at("$.n_cores")),
+            tasks.TaskEnvironmentVariable(
+                name="RESULTS_BUCKET", value=sfn.JsonPath.string_at("$.results.bucket")
+            ),
+            tasks.TaskEnvironmentVariable(
+                name="RESULTS_PREFIX", value=sfn.JsonPath.string_at("$.results.prefix")
+            ),
+        ]
+
+        run_task_standard = tasks.EcsRunTask(
             self,
             "RunFargateJob",
             integration_pattern=sfn.IntegrationPattern.RUN_JOB,
@@ -153,41 +202,41 @@ class ComposeRunnerStack(Stack):
             container_overrides=[
                 tasks.ContainerOverride(
                     container_definition=container,
-                    environment=[
-                        tasks.TaskEnvironmentVariable(
-                            name="ARTIFACT_PREFIX", value=sfn.JsonPath.string_at("$.artifact_prefix")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="META_ANALYSIS_ID", value=sfn.JsonPath.string_at("$.meta_analysis_id")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="ENVIRONMENT", value=sfn.JsonPath.string_at("$.environment")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="NSC_KEY", value=sfn.JsonPath.string_at("$.nsc_key")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="NV_KEY", value=sfn.JsonPath.string_at("$.nv_key")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="NO_UPLOAD", value=sfn.JsonPath.string_at("$.no_upload")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="N_CORES", value=sfn.JsonPath.string_at("$.n_cores")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="RESULTS_BUCKET", value=sfn.JsonPath.string_at("$.results.bucket")
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="RESULTS_PREFIX", value=sfn.JsonPath.string_at("$.results.prefix")
-                        ),
-                    ],
+                    environment=container_env_overrides,
                 )
             ],
             result_path="$.ecs",
         )
 
-        run_task.add_retry(
+        run_task_large = tasks.EcsRunTask(
+            self,
+            "RunFargateJobLarge",
+            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
+            cluster=cluster,
+            task_definition=task_definition_large,
+            launch_target=tasks.EcsFargateLaunchTarget(
+                platform_version=ecs.FargatePlatformVersion.LATEST
+            ),
+            assign_public_ip=True,
+            security_groups=[task_security_group],
+            subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            container_overrides=[
+                tasks.ContainerOverride(
+                    container_definition=container_large,
+                    environment=container_env_overrides,
+                )
+            ],
+            result_path="$.ecs",
+        )
+
+        run_task_standard.add_retry(
+            errors=["States.ALL"],
+            interval=Duration.seconds(30),
+            backoff_rate=2.0,
+            max_attempts=2,
+        )
+
+        run_task_large.add_retry(
             errors=["States.ALL"],
             interval=Duration.seconds(30),
             backoff_rate=2.0,
@@ -202,11 +251,20 @@ class ComposeRunnerStack(Stack):
                 "meta_analysis_id.$": "$.meta_analysis_id",
                 "environment.$": "$.environment",
                 "results.$": "$.results",
+                "task_size.$": "$.task_size",
                 "ecs.$": "$.ecs",
             },
         )
 
-        definition_chain = run_task.next(run_output)
+        definition_chain = sfn.Choice(
+            self,
+            "SelectFargateTask",
+        ).when(
+            sfn.Condition.string_equals("$.task_size", "large"),
+            run_task_large.next(run_output),
+        ).otherwise(
+            run_task_standard.next(run_output)
+        )
 
         state_machine = sfn.StateMachine(
             self,
