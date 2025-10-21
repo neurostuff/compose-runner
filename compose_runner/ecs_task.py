@@ -73,6 +73,13 @@ def _bool_from_env(value: Optional[str]) -> bool:
     return value.lower() in {"1", "true", "t", "yes", "y"}
 
 
+def _resolve_n_cores(env_value: Optional[str]) -> Optional[int]:
+    if env_value:
+        return int(env_value)
+    detected_cores = os.cpu_count()
+    return detected_cores if detected_cores else None
+
+
 def main() -> None:
     if ARTIFACT_PREFIX_ENV not in os.environ:
         raise RuntimeError(f"{ARTIFACT_PREFIX_ENV} environment variable must be set.")
@@ -85,8 +92,7 @@ def main() -> None:
     nsc_key = os.environ.get(NSC_KEY_ENV) or None
     nv_key = os.environ.get(NV_KEY_ENV) or None
     no_upload = _bool_from_env(os.environ.get(NO_UPLOAD_ENV))
-    n_cores_value = os.environ.get(N_CORES_ENV)
-    n_cores = int(n_cores_value) if n_cores_value else None
+    n_cores = _resolve_n_cores(os.environ.get(N_CORES_ENV))
 
     bucket = os.environ.get(RESULTS_BUCKET_ENV)
     prefix = os.environ.get(RESULTS_PREFIX_ENV)
