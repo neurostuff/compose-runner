@@ -1,0 +1,60 @@
+interactions:
+- request:
+    method: GET
+    uri: https://synth.neurostore.xyz/api/meta-analyses/ZPSvyvhZAopz?nested=true
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.4
+  response:
+    status:
+      code: 200
+      message: OK
+    headers:
+      Server:
+      - nginx/1.21.6
+      Date:
+      - Tue, 21 Oct 2025 14:08:45 GMT
+      Content-Type:
+      - application/json
+      Transfer-Encoding:
+      - chunked
+      Connection:
+      - keep-alive
+      Vary:
+      - Accept-Encoding
+      Content-Encoding:
+      - gzip
+      Strict-Transport-Security:
+      - max-age=31536000
+    body:
+      string: '{"id": "ZPSvyvhZAopz", "created_at": "2025-10-21T04:57:40.236536+00:00",
+        "updated_at": null, "user": "github|12564882", "username": "James Kent", "name":
+        "Untitled MKDADensity Meta Analysis: included", "description": "MKDADensity
+        meta analysis with FWECorrector", "provenance": null, "specification": {"id":
+        "zQdMa4uAaYYU", "created_at": "2025-10-21T04:57:39.888528+00:00", "updated_at":
+        null, "user": "github|12564882", "username": "James Kent", "type": "CBMA",
+        "estimator": {"type": "MKDADensity", "args": {"null_method": "approximate",
+        "n_iters": 5000, "**kwargs": {}, "kernel__r": 10, "kernel__value": 1}}, "database_studyset":
+        null, "filter": "included", "corrector": {"type": "FWECorrector", "args":
+        {"voxel_thresh": 0.001, "n_iters": 5000, "vfwe_only": false, "method": "montecarlo"}},
+        "conditions": [true], "weights": [1.0]}, "neurostore_analysis": {"id": "8S5xRedCGRkz",
+        "created_at": "2025-10-21T04:57:40.255480+00:00", "updated_at": null, "neurostore_id":
+        null, "exception": null, "traceback": null, "status": "PENDING"}, "studyset":
+        {"id": "9jPvdkuRufUP", "created_at": "2025-10-21T04:57:40.008456+00:00", "updated_at":
+        null, "user": "github|12564882", "username": "James Kent", "snapshot": null,
+        "neurostore_id": "3EmvH2LELwR2", "version": null, "url": "https://neurostore.org/api/studysets/3EmvH2LELwR2"},
+        "annotation": {"id": "YVLt6DRFKdd5", "created_at": "2025-10-21T04:57:40.121637+00:00",
+        "updated_at": null, "user": "github|12564882", "username": "James Kent", "snapshot":
+        null, "neurostore_id": "TebrRstj8ofh", "studyset": "3EmvH2LELwR2", "url":
+        "https://neurostore.org/api/annotations/TebrRstj8ofh"}, "project": "D2cTfoxNfpLy",
+        "cached_studyset": "9jPvdkuRufUP", "cached_annotation": "YVLt6DRFKdd5", "run_key":
+        "PDeDnh_8MXc88xoVJySz3w", "results": [], "neurostore_url": null}'
+    http_version: HTTP/1.1
+version: 1

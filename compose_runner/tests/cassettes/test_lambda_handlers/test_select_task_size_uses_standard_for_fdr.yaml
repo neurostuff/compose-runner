@@ -1,0 +1,55 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Connection:
+      - close
+      Host:
+      - synth.neurostore.xyz
+      User-Agent:
+      - compose-runner/submit
+    method: GET
+    uri: https://synth.neurostore.xyz/api/meta-analyses/VtFZJFniCKvG?nested=true
+  response:
+    body:
+      string: '{"id": "VtFZJFniCKvG", "created_at": "2025-10-21T14:10:35.309383+00:00",
+        "updated_at": null, "user": "github|12564882", "username": "James Kent", "name":
+        "Untitled MKDADensity Meta Analysis: included (1)", "description": "MKDADensity
+        meta analysis with FDRCorrector", "provenance": null, "specification": {"id":
+        "DtVzKEKGaXLu", "created_at": "2025-10-21T14:10:34.564365+00:00", "updated_at":
+        null, "user": "github|12564882", "username": "James Kent", "type": "CBMA",
+        "estimator": {"type": "MKDADensity", "args": {"null_method": "approximate",
+        "n_iters": 5000, "**kwargs": {}, "kernel__r": 10, "kernel__value": 1}}, "database_studyset":
+        null, "filter": "included", "corrector": {"type": "FDRCorrector", "args":
+        {"method": "indep", "alpha": 0.05}}, "conditions": [true], "weights": [1.0]},
+        "neurostore_analysis": {"id": "564c8kRnJVT4", "created_at": "2025-10-21T14:10:35.325173+00:00",
+        "updated_at": null, "neurostore_id": null, "exception": null, "traceback":
+        null, "status": "PENDING"}, "studyset": {"id": "FA3BDBdGRZ5d", "created_at":
+        "2025-10-21T14:10:34.821625+00:00", "updated_at": null, "user": "github|12564882",
+        "username": "James Kent", "snapshot": null, "neurostore_id": "3EmvH2LELwR2",
+        "version": null, "url": "https://neurostore.org/api/studysets/3EmvH2LELwR2"},
+        "annotation": {"id": "XELVYV7ftp7e", "created_at": "2025-10-21T14:10:35.183354+00:00",
+        "updated_at": null, "user": "github|12564882", "username": "James Kent", "snapshot":
+        null, "neurostore_id": "TebrRstj8ofh", "studyset": "3EmvH2LELwR2", "url":
+        "https://neurostore.org/api/annotations/TebrRstj8ofh"}, "project": "D2cTfoxNfpLy",
+        "cached_studyset": "FA3BDBdGRZ5d", "cached_annotation": "XELVYV7ftp7e", "run_key":
+        "V_jTcP2zfNlWD4KhwKKcJw", "results": [], "neurostore_url": null}'
+    headers:
+      Connection:
+      - close
+      Content-Length:
+      - '1750'
+      Content-Type:
+      - application/json
+      Date:
+      - Tue, 21 Oct 2025 14:14:50 GMT
+      Server:
+      - nginx/1.21.6
+      Strict-Transport-Security:
+      - max-age=31536000
+      Vary:
+      - Accept-Encoding
+    status:
+      code: 200
+      message: OK
+version: 1

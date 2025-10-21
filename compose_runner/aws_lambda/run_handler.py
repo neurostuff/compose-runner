@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import uuid
+import urllib.error
+import urllib.request
 from typing import Any, Dict, Optional
 
 import boto3
@@ -22,11 +24,74 @@ RESULTS_PREFIX_ENV = "RESULTS_PREFIX"
 NSC_KEY_ENV = "NSC_KEY"
 NV_KEY_ENV = "NV_KEY"
 
+DEFAULT_TASK_SIZE = "standard"
+
 
 def _log(job_id: str, message: str, **details: Any) -> None:
     payload = {"job_id": job_id, "message": message, **details}
     # Ensure consistent JSON logging for ingestion/filtering.
     logger.info(json.dumps(payload))
+
+
+def _compose_api_base_url(environment: str) -> str:
+    env = (environment or "production").lower()
+    if env == "staging":
+        return "https://synth.neurostore.xyz/api"
+    if env == "local":
+        return "http://localhost:81/api"
+    return "https://compose.neurosynth.org/api"
+
+
+def _fetch_meta_analysis(meta_analysis_id: str, environment: str) -> Optional[Dict[str, Any]]:
+    base_url = _compose_api_base_url(environment).rstrip("/")
+    url = f"{base_url}/meta-analyses/{meta_analysis_id}?nested=true"
+    request = urllib.request.Request(url, headers={"User-Agent": "compose-runner/submit"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.load(response)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to fetch meta-analysis %s: %s", meta_analysis_id, exc)
+        return None
+
+
+def _requires_large_task(specification: Dict[str, Any]) -> bool:
+    if not isinstance(specification, dict):
+        return False
+    corrector = specification.get("corrector")
+    if not isinstance(corrector, dict):
+        return False
+    if corrector.get("type") != "FWECorrector":
+        return False
+    args = corrector.get("args")
+    if not isinstance(args, dict):
+        return False
+    method = args.get("method")
+    if method is None:
+        kwargs = args.get("**kwargs")
+        if isinstance(kwargs, dict):
+            method = kwargs.get("method")
+    if isinstance(method, str) and method.lower() == "montecarlo":
+        return True
+    return False
+
+
+def _select_task_size(meta_analysis_id: str, environment: str, artifact_prefix: str) -> str:
+    doc = _fetch_meta_analysis(meta_analysis_id, environment)
+    if not doc:
+        return DEFAULT_TASK_SIZE
+    specification = doc.get("specification")
+    try:
+        if _requires_large_task(specification):
+            _log(
+                artifact_prefix,
+                "workflow.task_size_selected",
+                task_size="large",
+                reason="montecarlo_fwe",
+            )
+            return "large"
+    except Exception as exc:  # noqa: broad-except
+        logger.warning("Failed to evaluate specification for %s: %s", meta_analysis_id, exc)
+    return DEFAULT_TASK_SIZE
 
 
 def _job_input(
@@ -36,6 +101,7 @@ def _job_input(
     prefix: Optional[str],
     nsc_key: Optional[str],
     nv_key: Optional[str],
+    task_size: str,
 ) -> Dict[str, Any]:
     no_upload_flag = bool(payload.get("no_upload", False))
     doc: Dict[str, Any] = {
@@ -44,6 +110,7 @@ def _job_input(
         "environment": payload.get("environment", "production"),
         "no_upload": "true" if no_upload_flag else "false",
         "results": {"bucket": bucket or "", "prefix": prefix or ""},
+        "task_size": task_size,
     }
     n_cores = payload.get("n_cores")
     doc["n_cores"] = str(n_cores) if n_cores is not None else ""
@@ -76,7 +143,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     nsc_key = payload.get("nsc_key") or os.environ.get(NSC_KEY_ENV)
     nv_key = payload.get("nv_key") or os.environ.get(NV_KEY_ENV)
 
-    job_input = _job_input(payload, artifact_prefix, bucket, prefix, nsc_key, nv_key)
+    environment = payload.get("environment", "production")
+    task_size = _select_task_size(payload["meta_analysis_id"], environment, artifact_prefix)
+
+    job_input = _job_input(payload, artifact_prefix, bucket, prefix, nsc_key, nv_key, task_size)
     params = {
         "stateMachineArn": os.environ[STATE_MACHINE_ARN_ENV],
         "name": artifact_prefix,

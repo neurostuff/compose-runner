@@ -93,6 +93,7 @@ def main() -> None:
     nv_key = os.environ.get(NV_KEY_ENV) or None
     no_upload = _bool_from_env(os.environ.get(NO_UPLOAD_ENV))
     n_cores = _resolve_n_cores(os.environ.get(N_CORES_ENV))
+    compose_runner_version = os.environ.get("COMPOSE_RUNNER_VERSION", "unknown")
 
     bucket = os.environ.get(RESULTS_BUCKET_ENV)
     prefix = os.environ.get(RESULTS_PREFIX_ENV)
@@ -106,6 +107,7 @@ def main() -> None:
         meta_analysis_id=meta_analysis_id,
         environment=environment,
         no_upload=no_upload,
+        compose_runner_version=compose_runner_version,
     )
     try:
         url, _ = run_compose(
@@ -125,6 +127,7 @@ def main() -> None:
             "result_url": url,
             "artifacts_bucket": bucket,
             "artifacts_prefix": prefix,
+            "compose_runner_version": compose_runner_version,
         }
 
         if bucket:

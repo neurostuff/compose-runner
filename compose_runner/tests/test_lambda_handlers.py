@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+import pytest
+
 from compose_runner.aws_lambda import log_poll_handler, results_handler, run_handler, status_handler
 
 
@@ -23,6 +25,28 @@ def _make_http_event(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def test_requires_large_task_detection():
+    spec = {"corrector": {"type": "FWECorrector", "args": {"method": "montecarlo"}}}
+    assert run_handler._requires_large_task(spec)
+
+
+def test_requires_large_task_false_when_method_differs():
+    spec = {"corrector": {"type": "FWECorrector", "args": {"method": "bonferroni"}}}
+    assert run_handler._requires_large_task(spec) is False
+
+
+@pytest.mark.vcr(record_mode="once")
+def test_select_task_size_uses_large_for_montecarlo():
+    task_size = run_handler._select_task_size("ZPSvyvhZAopz", "staging", "artifact-test")
+    assert task_size == "large"
+
+
+@pytest.mark.vcr(record_mode="once")
+def test_select_task_size_uses_standard_for_fdr():
+    task_size = run_handler._select_task_size("VtFZJFniCKvG", "staging", "artifact-test")
+    assert task_size == "standard"
+
+
 def test_run_handler_http_success(monkeypatch, tmp_path):
     captured = {}
 
@@ -36,6 +60,7 @@ def test_run_handler_http_success(monkeypatch, tmp_path):
                 ...
 
     monkeypatch.setattr(run_handler, "_SFN_CLIENT", FakeSFN())
+    monkeypatch.setattr(run_handler, "_select_task_size", lambda *args: "standard")
     monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws:states:state-machine")
     monkeypatch.setenv("RESULTS_BUCKET", "bucket")
     monkeypatch.setenv("RESULTS_PREFIX", "prefix")
@@ -63,6 +88,32 @@ def test_run_handler_http_success(monkeypatch, tmp_path):
     assert input_doc["results"]["prefix"] == "prefix"
     assert input_doc["nsc_key"] == "nsc"
     assert input_doc["nv_key"] == "nv"
+    assert input_doc["task_size"] == "standard"
+
+
+def test_run_handler_http_uses_large_task(monkeypatch):
+    captured = {}
+
+    class FakeSFN:
+        def start_execution(self, **kwargs):
+            captured.update(kwargs)
+            return {"executionArn": "arn:aws:states:us-east-1:123:execution:state-machine:run-456"}
+
+        class exceptions:
+            class ExecutionAlreadyExists(Exception):
+                ...
+
+    monkeypatch.setattr(run_handler, "_SFN_CLIENT", FakeSFN())
+    monkeypatch.setattr(run_handler, "_select_task_size", lambda *args: "large")
+    monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws:states:state-machine")
+    monkeypatch.setenv("RESULTS_BUCKET", "bucket")
+    monkeypatch.setenv("RESULTS_PREFIX", "prefix")
+
+    event = _make_http_event({"meta_analysis_id": "abc123"})
+    response = run_handler.handler(event, DummyContext())
+    assert response["statusCode"] == 202
+    input_doc = json.loads(captured["input"])
+    assert input_doc["task_size"] == "large"
 
 
 def test_run_handler_missing_meta_analysis(monkeypatch):
