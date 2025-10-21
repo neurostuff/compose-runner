@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 from datetime import datetime
@@ -9,35 +8,14 @@ from typing import Any, Dict, Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from compose_runner.aws_lambda.common import LambdaRequest
+
 _SFN = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 _S3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
 RESULTS_PREFIX_ENV = "RESULTS_PREFIX"
 METADATA_FILENAME = "metadata.json"
-
-
-def _is_http_event(event: Any) -> bool:
-    return isinstance(event, dict) and "requestContext" in event
-
-
-def _extract_payload(event: Dict[str, Any]) -> Dict[str, Any]:
-    if not _is_http_event(event):
-        return event
-    body = event.get("body")
-    if not body:
-        return {}
-    if event.get("isBase64Encoded"):
-        body = base64.b64decode(body).decode("utf-8")
-    return json.loads(body)
-
-
-def _http_response(body: Dict[str, Any], status_code: int = 200) -> Dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body),
-    }
 
 
 def _serialize_dt(value: datetime) -> str:
@@ -72,23 +50,23 @@ def _parse_output(output: Optional[str]) -> Dict[str, Any]:
 
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    raw_event = event
-    event = _extract_payload(event)
+    request = LambdaRequest.parse(event)
+    payload = request.payload
 
-    job_id = event.get("job_id")
+    job_id = payload.get("job_id")
     if not job_id:
         message = "Request payload must include 'job_id'."
-        if _is_http_event(raw_event):
-            return _http_response({"status": "FAILED", "error": message}, status_code=400)
+        if request.is_http:
+            return request.bad_request(message, status_code=400)
         raise KeyError(message)
 
     try:
         description = _SFN.describe_execution(executionArn=job_id)
     except ClientError as error:
         body = {"status": "FAILED", "error": error.response["Error"]["Message"]}
-        if _is_http_event(raw_event):
+        if request.is_http:
             status_code = 404 if error.response["Error"]["Code"] == "ExecutionDoesNotExist" else 500
-            return _http_response(body, status_code=status_code)
+            return request.respond(body, status_code=status_code)
         raise
 
     status = description["status"]
@@ -119,6 +97,4 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if status == "FAILED":
             body["error"] = output_doc.get("error")
 
-    if _is_http_event(raw_event):
-        return _http_response(body)
-    return body
+    return request.respond(body)

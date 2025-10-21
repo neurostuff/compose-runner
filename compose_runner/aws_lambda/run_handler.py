@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -9,6 +8,8 @@ from typing import Any, Dict, Optional
 
 import boto3
 from botocore.exceptions import ClientError
+
+from compose_runner.aws_lambda.common import LambdaRequest
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -20,29 +21,6 @@ RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
 RESULTS_PREFIX_ENV = "RESULTS_PREFIX"
 NSC_KEY_ENV = "NSC_KEY"
 NV_KEY_ENV = "NV_KEY"
-
-
-def _is_http_event(event: Any) -> bool:
-    return isinstance(event, dict) and "requestContext" in event
-
-
-def _extract_payload(event: Dict[str, Any]) -> Dict[str, Any]:
-    if not _is_http_event(event):
-        return event
-    body = event.get("body")
-    if not body:
-        return {}
-    if event.get("isBase64Encoded"):
-        body = base64.b64decode(body).decode("utf-8")
-    return json.loads(body)
-
-
-def _http_response(body: Dict[str, Any], status_code: int = 200) -> Dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body),
-    }
 
 
 def _log(job_id: str, message: str, **details: Any) -> None:
@@ -81,18 +59,15 @@ def _job_input(
 
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    raw_event = event
-    payload = _extract_payload(event)
+    request = LambdaRequest.parse(event)
+    payload = request.payload
     if STATE_MACHINE_ARN_ENV not in os.environ:
         raise RuntimeError(f"{STATE_MACHINE_ARN_ENV} environment variable must be set.")
 
     if "meta_analysis_id" not in payload:
         message = "Request payload must include 'meta_analysis_id'."
-        if _is_http_event(raw_event):
-            return _http_response(
-                {"status": "FAILED", "error": message},
-                status_code=400,
-            )
+        if request.is_http:
+            return request.bad_request(message, status_code=400)
         raise KeyError(message)
 
     artifact_prefix = payload.get("artifact_prefix") or str(uuid.uuid4())
@@ -117,15 +92,15 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "error": "A job with the provided artifact_prefix already exists.",
             "artifact_prefix": artifact_prefix,
         }
-        if _is_http_event(raw_event):
-            return _http_response(body, status_code=409)
+        if request.is_http:
+            return request.respond(body, status_code=409)
         raise ValueError(body["error"]) from exc
     except ClientError as exc:
         _log(artifact_prefix, "workflow.failed_to_queue", error=str(exc))
         message = "Failed to start compose-runner job."
         body = {"status": "FAILED", "error": message}
-        if _is_http_event(raw_event):
-            return _http_response(body, status_code=500)
+        if request.is_http:
+            return request.respond(body, status_code=500)
         raise RuntimeError(message) from exc
 
     execution_arn = response["executionArn"]
@@ -137,6 +112,4 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         "status": "SUBMITTED",
         "status_url": f"/jobs/{execution_arn}",
     }
-    if _is_http_event(raw_event):
-        return _http_response(body, status_code=202)
-    return body
+    return request.respond(body, status_code=202)
