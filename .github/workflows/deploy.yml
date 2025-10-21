@@ -41,8 +41,9 @@ jobs:
         working-directory: infra/cdk
         env:
           RESULTS_PREFIX: compose-runner/results
-          RUN_MEMORY_SIZE: 3008
-          RUN_TIMEOUT_SECONDS: 900
+          TASK_CPU: 4096
+          TASK_MEMORY_MIB: 30720
+          STATE_MACHINE_TIMEOUT_SECONDS: 7200
         run: |
           source .venv/bin/activate
           VERSION=${GITHUB_REF_NAME}
@@ -51,29 +52,57 @@ jobs:
             --outputs-file cdk-outputs.json \
             -c composeRunnerVersion=${VERSION} \
             -c resultsPrefix=${RESULTS_PREFIX} \
-            -c runMemorySize=${RUN_MEMORY_SIZE} \
-            -c runTimeoutSeconds=${RUN_TIMEOUT_SECONDS}
+            -c taskCpu=${TASK_CPU} \
+            -c taskMemoryMiB=${TASK_MEMORY_MIB} \
+            -c stateMachineTimeoutSeconds=${STATE_MACHINE_TIMEOUT_SECONDS}
 
-      - name: Smoke test run endpoint
+      - name: Smoke test submission and status endpoints
         working-directory: infra/cdk
         run: |
-          RUN_URL=$(jq -r '.ComposeRunnerStack.ComposeRunnerFunctionUrl' cdk-outputs.json)
-          if [ -z "$RUN_URL" ] || [ "$RUN_URL" = "null" ]; then
-            echo "Run Function URL not found in outputs"
+          SUBMIT_URL=$(jq -r '.ComposeRunnerStack.ComposeRunnerSubmitFunctionUrl' cdk-outputs.json)
+          STATUS_URL=$(jq -r '.ComposeRunnerStack.ComposeRunnerStatusFunctionUrl' cdk-outputs.json)
+          if [ -z "$SUBMIT_URL" ] || [ "$SUBMIT_URL" = "null" ]; then
+            echo "Submit Function URL not found in outputs"
             exit 1
           fi
+          if [ -z "$STATUS_URL" ] || [ "$STATUS_URL" = "null" ]; then
+            echo "Status Function URL not found in outputs"
+            exit 1
+          fi
+
           body='{"meta_analysis_id": "pFGy6g3LRo9x", "environment": "production", "no_upload": true}'
-          response=$(curl -s -w "\n%{http_code}" -X POST "$RUN_URL" -H "Content-Type: application/json" -d "$body")
-          http_code=$(echo "$response" | tail -n1)
-          json_body=$(echo "$response" | head -n1)
-          echo "$json_body" > smoke_run.json
-          echo "Status code: $http_code"
-          if [ "$http_code" != "200" ]; then
-            echo "Run endpoint failed: $json_body"
+          response=$(curl -s -w "\n%{http_code}" -X POST "$SUBMIT_URL" -H "Content-Type: application/json" -d "$body")
+          submit_code=$(echo "$response" | tail -n1)
+          submit_json=$(echo "$response" | head -n1)
+          echo "$submit_json" > smoke_submit.json
+          echo "Submit status code: $submit_code"
+          if [ "$submit_code" != "202" ]; then
+            echo "Submit endpoint failed: $submit_json"
             exit 1
           fi
-          status=$(jq -r '.status' smoke_run.json)
-          if [ "$status" != "SUCCEEDED" ]; then
-            echo "Run endpoint returned non-success status: $json_body"
+          job_id=$(jq -r '.job_id' smoke_submit.json)
+          artifact_prefix=$(jq -r '.artifact_prefix' smoke_submit.json)
+          if [ -z "$job_id" ] || [ "$job_id" = "null" ]; then
+            echo "Submit response missing job_id: $submit_json"
+            exit 1
+          fi
+          if [ -z "$artifact_prefix" ] || [ "$artifact_prefix" = "null" ]; then
+            echo "Submit response missing artifact_prefix: $submit_json"
+            exit 1
+          fi
+
+          status_body=$(printf '{"job_id":"%s"}' "$job_id")
+          status_response=$(curl -s -w "\n%{http_code}" -X POST "$STATUS_URL" -H "Content-Type: application/json" -d "$status_body")
+          status_code=$(echo "$status_response" | tail -n1)
+          status_json=$(echo "$status_response" | head -n1)
+          echo "$status_json" > smoke_status.json
+          echo "Status status code: $status_code"
+          if [ "$status_code" != "200" ]; then
+            echo "Status endpoint failed: $status_json"
+            exit 1
+          fi
+          status_value=$(jq -r '.status' smoke_status.json)
+          if [ "$status_value" = "null" ] || [ -z "$status_value" ]; then
+            echo "Status response missing status: $status_json"
             exit 1
           fi
