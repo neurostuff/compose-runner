@@ -124,7 +124,7 @@ class ComposeRunnerStack(Stack):
         container = task_definition.add_container(
             "ComposeRunnerContainer",
             image=ecs.ContainerImage.from_docker_image_asset(fargate_asset),
-            command=["python", "-m", "compose_runner.ecs_task"],
+            entry_point=["python", "-m", "compose_runner.ecs_task"],
             logging=ecs.LogDriver.aws_logs(
                 log_group=task_log_group,
                 stream_prefix="compose-runner",
@@ -261,6 +261,7 @@ class ComposeRunnerStack(Stack):
             description="Reports Step Functions execution status and metadata.",
         )
         state_machine.grant_read(status_function)
+        results_bucket.grant_read(status_function)
 
         status_function_url = status_function.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.NONE,

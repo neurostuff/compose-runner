@@ -137,7 +137,7 @@ def test_results_handler(monkeypatch):
 def test_status_handler_succeeded(monkeypatch):
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
     stop = datetime(2024, 1, 1, 1, tzinfo=timezone.utc)
-    output_payload = {"artifact_prefix": "artifact-1", "results": {"bucket": "bucket", "prefix": "prefix"}}
+    output_payload = {"results": {"bucket": "bucket", "prefix": "prefix"}}
 
     class FakeBody:
         def __init__(self, data):
@@ -150,6 +150,7 @@ def test_status_handler_succeeded(monkeypatch):
         def describe_execution(self, **kwargs):
             return {
                 "status": "SUCCEEDED",
+                "name": "artifact-1",
                 "startDate": start,
                 "stopDate": stop,
                 "output": json.dumps(output_payload),

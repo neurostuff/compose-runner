@@ -14,7 +14,7 @@ RUN hatch dep show requirements > requirements.txt && pip install -r requirement
 
 COPY . .
 
-# install the package (more likely to change, leverage caching!)
-RUN pip install .
+# install the package with AWS extras so the ECS task has boto3, etc.
+RUN pip install '.[aws]'
 
 ENTRYPOINT ["compose-run"]

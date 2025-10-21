@@ -81,7 +81,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     output_doc = _parse_output(description.get("output"))
     body["output"] = output_doc
 
-    artifact_prefix = output_doc.get("artifact_prefix") or output_doc.get("run_id")
+    artifact_prefix = description.get("name")
+    if not artifact_prefix:
+        raise ValueError("Execution does not expose a name; cannot determine artifact prefix.")
     body["artifact_prefix"] = artifact_prefix
 
     if status in {"SUCCEEDED", "FAILED"}:
