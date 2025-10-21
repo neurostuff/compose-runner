@@ -39,9 +39,9 @@ def _http_response(body: Dict[str, Any], status_code: int = 200) -> Dict[str, An
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     raw_event = event
     event = _extract_payload(event)
-    job_id = event.get("job_id")
-    if not job_id:
-        message = "Request payload must include 'job_id'."
+    artifact_prefix = event.get("artifact_prefix") or event.get("job_id")
+    if not artifact_prefix:
+        message = "Request payload must include 'artifact_prefix' (or legacy 'job_id')."
         if _is_http_event(raw_event):
             return _http_response({"status": "FAILED", "error": message}, status_code=400)
         raise KeyError(message)
@@ -60,7 +60,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     params: Dict[str, Any] = {
         "logGroupName": log_group,
-        "filterPattern": f'"{job_id}"',
+        "filterPattern": f'"{artifact_prefix}"',
         "startTime": int(start_time),
     }
     if end_time is not None:
@@ -75,7 +75,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     ]
 
     body = {
-        "job_id": job_id,
+        "artifact_prefix": artifact_prefix,
         "events": events,
         "next_token": response.get("nextToken"),
     }

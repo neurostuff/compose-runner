@@ -1,24 +1,25 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
-import base64
-from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+import uuid
+from typing import Any, Dict, Optional
 
 import boto3
-
-NUMBA_CACHE_DIR = Path(os.environ.get("NUMBA_CACHE_DIR", "/tmp/numba_cache"))
-NUMBA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-os.environ["NUMBA_CACHE_DIR"] = str(NUMBA_CACHE_DIR)
-
-from compose_runner.run import run as run_compose
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-_S3_CLIENT = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+_SFN_CLIENT = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+
+STATE_MACHINE_ARN_ENV = "STATE_MACHINE_ARN"
+RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
+RESULTS_PREFIX_ENV = "RESULTS_PREFIX"
+NSC_KEY_ENV = "NSC_KEY"
+NV_KEY_ENV = "NV_KEY"
 
 
 def _is_http_event(event: Any) -> bool:
@@ -50,88 +51,92 @@ def _log(job_id: str, message: str, **details: Any) -> None:
     logger.info(json.dumps(payload))
 
 
-def _iter_result_files(result_dir: Path) -> Iterable[Path]:
-    for path in result_dir.iterdir():
-        if path.is_file():
-            yield path
-
-
-def _upload_results(job_id: str, result_dir: Path, bucket: str, prefix: Optional[str]) -> None:
-    base_prefix = f"{prefix.rstrip('/')}/{job_id}" if prefix else job_id
-    for file_path in _iter_result_files(result_dir):
-        key = f"{base_prefix}/{file_path.name}"
-        _S3_CLIENT.upload_file(str(file_path), bucket, key)
+def _job_input(
+    payload: Dict[str, Any],
+    artifact_prefix: str,
+    bucket: Optional[str],
+    prefix: Optional[str],
+    nsc_key: Optional[str],
+    nv_key: Optional[str],
+) -> Dict[str, Any]:
+    no_upload_flag = bool(payload.get("no_upload", False))
+    doc: Dict[str, Any] = {
+        "artifact_prefix": artifact_prefix,
+        "meta_analysis_id": payload["meta_analysis_id"],
+        "environment": payload.get("environment", "production"),
+        "no_upload": "true" if no_upload_flag else "false",
+        "results": {"bucket": bucket or "", "prefix": prefix or ""},
+    }
+    n_cores = payload.get("n_cores")
+    doc["n_cores"] = str(n_cores) if n_cores is not None else ""
+    if nsc_key is not None:
+        doc["nsc_key"] = nsc_key
+    else:
+        doc["nsc_key"] = ""
+    if nv_key is not None:
+        doc["nv_key"] = nv_key
+    else:
+        doc["nv_key"] = ""
+    return doc
 
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     raw_event = event
     payload = _extract_payload(event)
-    job_id = context.aws_request_id
+    if STATE_MACHINE_ARN_ENV not in os.environ:
+        raise RuntimeError(f"{STATE_MACHINE_ARN_ENV} environment variable must be set.")
+
     if "meta_analysis_id" not in payload:
         message = "Request payload must include 'meta_analysis_id'."
-        _log(job_id, "workflow.failed", error=message)
         if _is_http_event(raw_event):
             return _http_response(
-                {"job_id": job_id, "status": "FAILED", "error": message}, status_code=400
+                {"status": "FAILED", "error": message},
+                status_code=400,
             )
         raise KeyError(message)
-    meta_analysis_id = payload["meta_analysis_id"]
-    environment = payload.get("environment", "production")
-    nsc_key = payload.get("nsc_key") or os.environ.get("NSC_KEY")
-    nv_key = payload.get("nv_key") or os.environ.get("NV_KEY")
-    no_upload = bool(payload.get("no_upload", False))
-    n_cores = payload.get("n_cores")
 
-    result_dir = Path("/tmp") / job_id
-    result_dir.mkdir(parents=True, exist_ok=True)
+    artifact_prefix = payload.get("artifact_prefix") or str(uuid.uuid4())
+    bucket = os.environ.get(RESULTS_BUCKET_ENV)
+    prefix = os.environ.get(RESULTS_PREFIX_ENV)
+    nsc_key = payload.get("nsc_key") or os.environ.get(NSC_KEY_ENV)
+    nv_key = payload.get("nv_key") or os.environ.get(NV_KEY_ENV)
 
-    bucket = os.environ.get("RESULTS_BUCKET")
-    prefix = os.environ.get("RESULTS_PREFIX")
+    job_input = _job_input(payload, artifact_prefix, bucket, prefix, nsc_key, nv_key)
+    params = {
+        "stateMachineArn": os.environ[STATE_MACHINE_ARN_ENV],
+        "name": artifact_prefix,
+        "input": json.dumps(job_input),
+    }
 
-    _log(
-        job_id,
-        "workflow.start",
-        meta_analysis_id=meta_analysis_id,
-        environment=environment,
-        no_upload=no_upload,
-    )
     try:
-        url, _ = run_compose(
-            meta_analysis_id=meta_analysis_id,
-            environment=environment,
-            result_dir=str(result_dir),
-            nsc_key=nsc_key,
-            nv_key=nv_key,
-            no_upload=no_upload,
-            n_cores=n_cores,
-        )
-        _log(job_id, "workflow.completed", result_url=url)
-
-        if bucket:
-            _upload_results(job_id, result_dir, bucket, prefix)
-            _log(job_id, "artifacts.uploaded", bucket=bucket, prefix=prefix)
-
+        response = _SFN_CLIENT.start_execution(**params)
+    except _SFN_CLIENT.exceptions.ExecutionAlreadyExists as exc:
+        _log(artifact_prefix, "workflow.duplicate", error=str(exc))
         body = {
-            "job_id": job_id,
-            "status": "SUCCEEDED",
-            "result_url": url,
-            "artifacts_bucket": bucket,
-            "artifacts_prefix": prefix,
+            "status": "FAILED",
+            "error": "A job with the provided artifact_prefix already exists.",
+            "artifact_prefix": artifact_prefix,
         }
         if _is_http_event(raw_event):
-            return _http_response(body)
-        return body
-    except Exception as exc:  # noqa: broad-except - bubble up but log context
-        _log(job_id, "workflow.failed", error=str(exc))
+            return _http_response(body, status_code=409)
+        raise ValueError(body["error"]) from exc
+    except ClientError as exc:
+        _log(artifact_prefix, "workflow.failed_to_queue", error=str(exc))
+        message = "Failed to start compose-runner job."
+        body = {"status": "FAILED", "error": message}
         if _is_http_event(raw_event):
-            return _http_response(
-                {"job_id": job_id, "status": "FAILED", "error": str(exc)}, status_code=500
-            )
-        raise
-    finally:
-        if os.environ.get("DELETE_TMP", "true").lower() == "true":
-            for path in _iter_result_files(result_dir):
-                try:
-                    path.unlink()
-                except OSError:
-                    _log(job_id, "cleanup.warning", file=str(path))
+            return _http_response(body, status_code=500)
+        raise RuntimeError(message) from exc
+
+    execution_arn = response["executionArn"]
+    _log(artifact_prefix, "workflow.queued", execution_arn=execution_arn)
+
+    body = {
+        "job_id": execution_arn,
+        "artifact_prefix": artifact_prefix,
+        "status": "SUBMITTED",
+        "status_url": f"/jobs/{execution_arn}",
+    }
+    if _is_http_event(raw_event):
+        return _http_response(body, status_code=202)
+    return body

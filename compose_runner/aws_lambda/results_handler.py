@@ -50,15 +50,15 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     bucket = os.environ[RESULTS_BUCKET_ENV]
     prefix = os.environ.get(RESULTS_PREFIX_ENV)
 
-    job_id = event.get("job_id")
-    if not job_id:
-        message = "Request payload must include 'job_id'."
+    artifact_prefix = event.get("artifact_prefix") or event.get("run_id") or event.get("job_id")
+    if not artifact_prefix:
+        message = "Request payload must include 'artifact_prefix' (or legacy 'run_id')."
         if _is_http_event(raw_event):
             return _http_response({"status": "FAILED", "error": message}, status_code=400)
         raise KeyError(message)
     expires_in = int(event.get("expires_in", DEFAULT_EXPIRES_IN))
 
-    key_prefix = f"{prefix.rstrip('/')}/{job_id}" if prefix else job_id
+    key_prefix = f"{prefix.rstrip('/')}/{artifact_prefix}" if prefix else artifact_prefix
 
     response = _S3.list_objects_v2(Bucket=bucket, Prefix=key_prefix)
     contents = response.get("Contents", [])
@@ -84,7 +84,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         )
 
     body = {
-        "job_id": job_id,
+        "artifact_prefix": artifact_prefix,
+        "job_id": event.get("job_id"),
         "artifacts": artifacts,
         "bucket": bucket,
         "prefix": key_prefix,
