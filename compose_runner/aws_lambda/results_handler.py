@@ -27,11 +27,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     bucket = os.environ[RESULTS_BUCKET_ENV]
     prefix = os.environ.get(RESULTS_PREFIX_ENV)
 
-    artifact_prefix = (
-        payload.get("artifact_prefix") or payload.get("run_id") or payload.get("job_id")
-    )
+    artifact_prefix = payload.get("artifact_prefix")
     if not artifact_prefix:
-        message = "Request payload must include 'artifact_prefix' (or legacy 'run_id')."
+        message = "Request payload must include 'artifact_prefix'."
         if request.is_http:
             return request.bad_request(message, status_code=400)
         raise KeyError(message)
@@ -64,7 +62,6 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     body = {
         "artifact_prefix": artifact_prefix,
-        "job_id": payload.get("job_id"),
         "artifacts": artifacts,
         "bucket": bucket,
         "prefix": key_prefix,

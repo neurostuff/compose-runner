@@ -17,9 +17,9 @@ DEFAULT_LOOKBACK_MS_ENV = "DEFAULT_LOOKBACK_MS"
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     request = LambdaRequest.parse(event)
     payload = request.payload
-    artifact_prefix = payload.get("artifact_prefix") or payload.get("job_id")
+    artifact_prefix = payload.get("artifact_prefix")
     if not artifact_prefix:
-        message = "Request payload must include 'artifact_prefix' (or legacy 'job_id')."
+        message = "Request payload must include 'artifact_prefix'."
         if request.is_http:
             return request.bad_request(message, status_code=400)
         raise KeyError(message)
