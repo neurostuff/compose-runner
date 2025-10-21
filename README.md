@@ -44,7 +44,7 @@ The deployed architecture works like this:
    Pass `-c resultsBucketName=<bucket>` to use an existing S3 bucket, or omit it
    to let the stack create and retain a dedicated bucket. Additional knobs:
 
-   - `-c stateMachineTimeoutSeconds=7200` to control the max wall clock per run
+  - `-c stateMachineTimeoutSeconds=32400` to control the max wall clock per run
    - `-c submitTimeoutSeconds` / `-c statusTimeoutSeconds` / `-c pollTimeoutSeconds`
      to tune Lambda timeouts
    - `-c taskEphemeralStorageGiB` if the default 21 GiB scratch volume is insufficient

@@ -41,8 +41,8 @@ class ComposeRunnerStack(Stack):
         task_memory_mib = int(self.node.try_get_context("taskMemoryMiB") or 30720)
         task_ephemeral_storage_gib = int(self.node.try_get_context("taskEphemeralStorageGiB") or 21)
         task_cpu_large = int(self.node.try_get_context("taskCpuLarge") or 16384)
-        task_memory_large_mib = int(self.node.try_get_context("taskMemoryLargeMiB") or 32768)
-        state_machine_timeout_seconds = int(self.node.try_get_context("stateMachineTimeoutSeconds") or 7200)
+        task_memory_large_mib = int(self.node.try_get_context("taskMemoryLargeMiB") or 65536)
+        state_machine_timeout_seconds = int(self.node.try_get_context("stateMachineTimeoutSeconds") or 32400)
 
         if task_cpu_large >= 16384 and task_memory_large_mib < 32768:
             raise ValueError("taskMemoryLargeMiB must be at least 32768 MiB for 16 vCPU tasks.")
