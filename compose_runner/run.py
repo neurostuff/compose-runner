@@ -198,6 +198,10 @@ class Runner:
         weights = self.cached_specification.get("weights", [])
         weight_conditions = {w: c for c, w in zip(conditions, weights)}
 
+        # since we added "order" to annotations
+        if isinstance(column_type, dict):
+            column_type = column_type.get("type")
+
         if not (conditions or weights) and column_type != "boolean":
             raise ValueError(
                 f"Column type {column_type} requires a conditions and weights."
