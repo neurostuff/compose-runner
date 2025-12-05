@@ -36,6 +36,7 @@ class ComposeRunnerStack(Stack):
         poll_memory_size = int(self.node.try_get_context("pollMemorySize") or 512)
         poll_timeout_seconds = int(self.node.try_get_context("pollTimeoutSeconds") or 30)
         poll_lookback_ms = int(self.node.try_get_context("pollLookbackMs") or 3600000)
+        monthly_spend_limit_usd = float(self.node.try_get_context("monthlySpendLimit") or 100)
 
         task_cpu = int(self.node.try_get_context("taskCpu") or 4096)
         task_memory_mib = int(self.node.try_get_context("taskMemoryMiB") or 30720)
@@ -243,6 +244,31 @@ class ComposeRunnerStack(Stack):
             max_attempts=2,
         )
 
+        cost_check_code = lambda_.DockerImageCode.from_image_asset(
+            str(project_root),
+            file="aws_lambda/Dockerfile",
+            cmd=["compose_runner.aws_lambda.cost_check_handler.handler"],
+            build_args=build_args,
+        )
+
+        cost_check_function = lambda_.DockerImageFunction(
+            self,
+            "ComposeRunnerCostCheck",
+            code=cost_check_code,
+            memory_size=256,
+            timeout=Duration.seconds(15),
+            environment={
+                "COST_LIMIT_USD": str(monthly_spend_limit_usd),
+            },
+            description="Blocks executions when monthly spend exceeds the configured limit.",
+        )
+        cost_check_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ce:GetCostAndUsage"],
+                resources=["*"],
+            )
+        )
+
         run_output = sfn.Pass(
             self,
             "ComposeRunnerOutput",
@@ -256,7 +282,7 @@ class ComposeRunnerStack(Stack):
             },
         )
 
-        definition_chain = sfn.Choice(
+        task_selection = sfn.Choice(
             self,
             "SelectFargateTask",
         ).when(
@@ -265,6 +291,28 @@ class ComposeRunnerStack(Stack):
         ).otherwise(
             run_task_standard.next(run_output)
         )
+
+        cost_limit_exceeded = sfn.Fail(
+            self,
+            "CostLimitExceeded",
+            cause="Monthly spend limit exceeded.",
+            error="CostLimitExceeded",
+        )
+
+        enforce_cost_limit = sfn.Choice(self, "EnforceMonthlyCostLimit").when(
+            sfn.Condition.boolean_equals("$.cost_check.Payload.allowed", False),
+            cost_limit_exceeded,
+        ).otherwise(task_selection)
+
+        cost_check_step = tasks.LambdaInvoke(
+            self,
+            "CheckMonthlyCost",
+            lambda_function=cost_check_function,
+            payload=sfn.TaskInput.from_object({"stateInput.$": "$"}),
+            result_path="$.cost_check",
+        )
+
+        definition_chain = cost_check_step.next(enforce_cost_limit)
 
         state_machine = sfn.StateMachine(
             self,
