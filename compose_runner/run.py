@@ -297,9 +297,6 @@ class Runner:
             second_studyset.to_dataset() if second_studyset is not None else None
         )
         estimator, corrector = self.load_specification(n_cores=n_cores)
-        estimator, corrector = self.validate_specification(
-            estimator, corrector, first_dataset, second_dataset
-        )
         self.first_dataset = first_dataset
         self.second_dataset = second_dataset
         self.estimator = estimator
@@ -418,18 +415,6 @@ class Runner:
 
         return estimator_init, corrector_init
 
-    def validate_specification(
-        self, estimator, corrector, dataset, second_dataset=None
-    ):
-        if (
-            isinstance(estimator, (ALE, ALESubtraction, SCALE))
-            and estimator.kernel_transformer.sample_size is not None
-        ):
-            if any(dataset.metadata["sample_sizes"].isnull()):
-                raise ValueError(
-                    "Sample size is required for ALE with sample size weighting."
-                )
-        return estimator, corrector
 
     def _persist_meta_results(self):
         """Persist meta-analysis results locally for downstream access."""
