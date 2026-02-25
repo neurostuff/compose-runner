@@ -21,6 +21,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
       - name: Install CDK dependencies
         working-directory: infra/cdk
         run: |
@@ -29,7 +35,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install AWS CDK CLI
-        run: npm install -g aws-cdk
+        run: npm install -g aws-cdk@2.130.0 --registry=https://registry.npmjs.org
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
