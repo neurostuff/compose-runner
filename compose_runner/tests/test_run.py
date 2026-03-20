@@ -1,6 +1,7 @@
 import pytest
 from requests.exceptions import HTTPError
 
+from compose_runner import run as run_module
 from compose_runner.run import Runner
 
 @pytest.mark.vcr(record_mode="once")
