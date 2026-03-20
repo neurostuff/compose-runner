@@ -80,8 +80,8 @@ class Runner:
         self.cached_studyset = None
         self.cached_annotation = None
         self.cached_specification = None
-        self.first_dataset = None
-        self.second_dataset = None
+        self.first_studyset = None
+        self.second_studyset = None
         self.estimator = None
         self.corrector = None
 
@@ -292,13 +292,9 @@ class Runner:
         studyset = Studyset(self.cached_studyset)
         annotation = Annotation(self.cached_annotation, studyset)
         first_studyset, second_studyset = self.apply_filter(studyset, annotation)
-        first_dataset = first_studyset.to_dataset()
-        second_dataset = (
-            second_studyset.to_dataset() if second_studyset is not None else None
-        )
         estimator, corrector = self.load_specification(n_cores=n_cores)
-        self.first_dataset = first_dataset
-        self.second_dataset = second_dataset
+        self.first_studyset = first_studyset
+        self.second_studyset = second_studyset
         self.estimator = estimator
         self.corrector = corrector
 
@@ -323,25 +319,28 @@ class Runner:
             raise ValueError(f"Could not create result for {self.meta_analysis_id}")
 
     def run_meta_analysis(self):
-        if self.second_dataset and isinstance(self.estimator, PairwiseCBMAEstimator):
+        if self.second_studyset and isinstance(self.estimator, PairwiseCBMAEstimator):
             workflow = PairwiseCBMAWorkflow(
                 estimator=self.estimator,
                 corrector=self.corrector,
                 diagnostics="focuscounter",
                 output_dir=self.result_dir,
             )
-            self.meta_results = workflow.fit(self.first_dataset, self.second_dataset)
-        elif self.second_dataset is None and isinstance(self.estimator, CBMAEstimator):
+            self.meta_results = workflow.fit(
+                self.first_studyset,
+                self.second_studyset,
+            )
+        elif self.second_studyset is None and isinstance(self.estimator, CBMAEstimator):
             workflow = CBMAWorkflow(
                 estimator=self.estimator,
                 corrector=self.corrector,
                 diagnostics="focuscounter",
                 output_dir=self.result_dir,
             )
-            self.meta_results = workflow.fit(self.first_dataset, self.second_dataset)
+            self.meta_results = workflow.fit(self.first_studyset)
         else:
             raise ValueError(
-                f"Estimator {self.estimator} and datasets {self.first_dataset} and {self.second_dataset} are not compatible."
+                f"Estimator {self.estimator} and studysets {self.first_studyset} and {self.second_studyset} are not compatible."
             )
         self._persist_meta_results()
 
