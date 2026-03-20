@@ -1,12 +1,11 @@
 import pytest
 from requests.exceptions import HTTPError
 
-import compose_runner.run as run_module
-
+from compose_runner.run import Runner
 
 @pytest.mark.vcr(record_mode="once")
 def test_incorrect_id():
-    runner = run_module.Runner(
+    runner = Runner(
         meta_analysis_id="made_up_id",
         environment="staging",
     )
@@ -17,7 +16,7 @@ def test_incorrect_id():
 
 @pytest.mark.vcr(record_mode="once")
 def test_download_bundle():
-    runner = run_module.Runner(
+    runner = Runner(
         meta_analysis_id="3opENJpHxRsH",
         environment="staging",
     )
@@ -29,7 +28,7 @@ def test_download_bundle():
 
 @pytest.mark.vcr(record_mode="once")
 def test_run_workflow():
-    runner = run_module.Runner(
+    runner = Runner(
         meta_analysis_id="3opENJpHxRsH",
         environment="staging",
     )
@@ -38,7 +37,7 @@ def test_run_workflow():
 
 @pytest.mark.vcr(record_mode="once")
 def test_run_database_workflow():
-    runner = run_module.Runner(
+    runner = Runner(
         meta_analysis_id="dRFtnAo9bhp3",
         environment="staging",
     )
@@ -47,7 +46,7 @@ def test_run_database_workflow():
 
 @pytest.mark.vcr(record_mode="once")
 def test_run_group_comparison_workflow():
-    runner = run_module.Runner(
+    runner = Runner(
         meta_analysis_id="4CGQSSyaoWN3",
         environment="staging",
     )
@@ -56,7 +55,7 @@ def test_run_group_comparison_workflow():
 
 @pytest.mark.vcr(record_mode="once")
 def test_run_string_group_comparison_workflow():
-    runner = run_module.Runner(
+    runner = Runner(
         meta_analysis_id="7joU2Siajs5X",
         environment="staging",
     )
@@ -89,10 +88,10 @@ def test_process_bundle_keeps_studysets(monkeypatch):
 
     monkeypatch.setattr(run_module, "Studyset", FakeStudyset)
     monkeypatch.setattr(run_module, "Annotation", FakeAnnotation)
-    monkeypatch.setattr(run_module.Runner, "apply_filter", fake_apply_filter)
-    monkeypatch.setattr(run_module.Runner, "load_specification", fake_load_specification)
+    monkeypatch.setattr(Runner, "apply_filter", fake_apply_filter)
+    monkeypatch.setattr(Runner, "load_specification", fake_load_specification)
 
-    runner = run_module.Runner(meta_analysis_id="made_up_id", environment="staging")
+    runner = Runner(meta_analysis_id="made_up_id", environment="staging")
     runner.cached_studyset = {"id": "studyset", "studies": []}
     runner.cached_annotation = {"note_keys": {}}
 
@@ -126,7 +125,7 @@ def test_run_meta_analysis_single_studyset_uses_cbma_workflow(monkeypatch, tmp_p
     monkeypatch.setattr(run_module, "CBMAEstimator", FakeCBMAEstimator)
     monkeypatch.setattr(run_module, "CBMAWorkflow", FakeWorkflow)
 
-    runner = run_module.Runner(meta_analysis_id="made_up_id", environment="staging", result_dir=tmp_path)
+    runner = Runner(meta_analysis_id="made_up_id", environment="staging", result_dir=tmp_path)
     runner.first_studyset = object()
     runner.second_studyset = None
     runner.estimator = FakeCBMAEstimator()
@@ -161,7 +160,7 @@ def test_run_meta_analysis_pairwise_uses_pairwise_workflow(monkeypatch, tmp_path
     monkeypatch.setattr(run_module, "PairwiseCBMAEstimator", FakePairwiseEstimator)
     monkeypatch.setattr(run_module, "PairwiseCBMAWorkflow", FakeWorkflow)
 
-    runner = run_module.Runner(meta_analysis_id="made_up_id", environment="staging", result_dir=tmp_path)
+    runner = Runner(meta_analysis_id="made_up_id", environment="staging", result_dir=tmp_path)
     runner.first_studyset = object()
     runner.second_studyset = object()
     runner.estimator = FakePairwiseEstimator()
@@ -177,7 +176,7 @@ def test_run_meta_analysis_pairwise_uses_pairwise_workflow(monkeypatch, tmp_path
     assert runner.meta_results == "pairwise-results"
 
 # def test_yifan_workflow():
-#     runner = run_module.Runner(
+#     runner = Runner(
 #         meta_analysis_id="4WELjap2yCJm",
 #     )
 #     runner.run_workflow()
@@ -185,7 +184,7 @@ def test_run_meta_analysis_pairwise_uses_pairwise_workflow(monkeypatch, tmp_path
 
 # @pytest.mark.vcr(record_mode="once")
 # def test_mkdachis_comparison_workflow():
-#     runner = run_module.Runner(
+#     runner = Runner(
 #         meta_analysis_id="6Grzwzs3t7YB",
 #     )
 #     runner.run_workflow()

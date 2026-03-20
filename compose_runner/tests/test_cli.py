@@ -1,6 +1,5 @@
 from click.testing import CliRunner
 
-import compose_runner.cli as cli_module
 from compose_runner.cli import cli
 
 
@@ -19,7 +18,7 @@ def test_cli(monkeypatch):
         }
         return "https://example.org/result", None
 
-    monkeypatch.setattr(cli_module, "run", fake_run)
+    monkeypatch.setattr(cli, "run", fake_run)
 
     runner = CliRunner()
     result = runner.invoke(
