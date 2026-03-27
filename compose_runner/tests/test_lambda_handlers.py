@@ -35,13 +35,13 @@ def test_requires_large_task_false_when_method_differs():
     assert run_handler._requires_large_task(spec) is False
 
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_select_task_size_uses_large_for_montecarlo():
     task_size = run_handler._select_task_size("ZPSvyvhZAopz", "staging", "artifact-test")
     assert task_size == "large"
 
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_select_task_size_uses_standard_for_fdr():
     task_size = run_handler._select_task_size("VtFZJFniCKvG", "staging", "artifact-test")
     assert task_size == "standard"

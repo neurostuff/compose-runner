@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM public.ecr.aws/docker/library/python:3.13-slim
 
 ARG COMPOSE_RUNNER_VERSION
 ENV COMPOSE_RUNNER_VERSION=${COMPOSE_RUNNER_VERSION}

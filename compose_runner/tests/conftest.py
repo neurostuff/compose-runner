@@ -3,5 +3,8 @@ import pytest
 
 @pytest.fixture(scope="session")
 def vcr_config():
-    """Configure VCR to decode compressed HTTP responses when recording."""
-    return {"decode_compressed_response": True}
+    """Replay cassettes without live network dependency during routine test runs."""
+    return {
+        "decode_compressed_response": True,
+        "record_mode": "none",
+    }

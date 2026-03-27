@@ -4,7 +4,7 @@ from requests.exceptions import HTTPError
 from compose_runner import run as run_module
 from compose_runner.run import Runner
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_incorrect_id():
     runner = Runner(
         meta_analysis_id="made_up_id",
@@ -15,7 +15,7 @@ def test_incorrect_id():
         runner.run_workflow()
 
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_download_bundle():
     runner = Runner(
         meta_analysis_id="3opENJpHxRsH",
@@ -27,7 +27,7 @@ def test_download_bundle():
     assert runner.cached_specification is not None
 
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_run_workflow():
     runner = Runner(
         meta_analysis_id="3opENJpHxRsH",
@@ -36,7 +36,7 @@ def test_run_workflow():
     runner.run_workflow(n_cores=2)
 
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_run_database_workflow():
     runner = Runner(
         meta_analysis_id="dRFtnAo9bhp3",
@@ -45,7 +45,7 @@ def test_run_database_workflow():
     runner.run_workflow()
 
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_run_group_comparison_workflow():
     runner = Runner(
         meta_analysis_id="4CGQSSyaoWN3",
@@ -54,7 +54,7 @@ def test_run_group_comparison_workflow():
     runner.run_workflow()
 
 
-@pytest.mark.vcr(record_mode="once")
+@pytest.mark.vcr(record_mode="none")
 def test_run_string_group_comparison_workflow():
     runner = Runner(
         meta_analysis_id="7joU2Siajs5X",
