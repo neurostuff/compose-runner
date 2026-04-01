@@ -6,20 +6,30 @@ import os
 
 import aws_cdk as cdk
 
-from stacks.compose_runner_stack import ComposeRunnerStack
+from stacks import ComposeRunnerImageRepositoriesStack, ComposeRunnerStack
 
 
 def main() -> None:
     app = cdk.App()
-
-    ComposeRunnerStack(
-        app,
-        "ComposeRunnerStack",
-        env=cdk.Environment(
-            account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-            region=os.getenv("CDK_DEFAULT_REGION"),
-        ),
+    env = cdk.Environment(
+        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
+        region=os.getenv("CDK_DEFAULT_REGION"),
     )
+
+    image_repositories_stack = ComposeRunnerImageRepositoriesStack(
+        app,
+        "ComposeRunnerImageRepositoriesStack",
+        env=env,
+    )
+
+    if app.node.try_get_context("composeRunnerVersion"):
+        ComposeRunnerStack(
+            app,
+            "ComposeRunnerStack",
+            ecs_image_repository=image_repositories_stack.ecs_image_repository,
+            lambda_image_repository=image_repositories_stack.lambda_image_repository,
+            env=env,
+        )
 
     app.synth()
 
