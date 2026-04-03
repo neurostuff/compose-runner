@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import aws_cdk as cdk
 from aws_cdk import (
     Duration,
     RemovalPolicy,
     Stack,
     aws_ec2 as ec2,
-    aws_ecr_assets as ecr_assets,
+    aws_ecr as ecr,
     aws_ecs as ecs,
     aws_iam as iam,
     aws_lambda as lambda_,
@@ -23,7 +21,15 @@ from constructs import Construct
 class ComposeRunnerStack(Stack):
     """Provision Step Functions + ECS infrastructure for compose-runner workflows."""
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs: object) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        ecs_image_repository: ecr.IRepository,
+        lambda_image_repository: ecr.IRepository,
+        **kwargs: object,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # Context configuration with sensible defaults.
@@ -40,7 +46,7 @@ class ComposeRunnerStack(Stack):
 
         task_cpu = int(self.node.try_get_context("taskCpu") or 4096)
         task_memory_mib = int(self.node.try_get_context("taskMemoryMiB") or 30720)
-        task_ephemeral_storage_gib = int(self.node.try_get_context("taskEphemeralStorageGiB") or 21)
+        task_ephemeral_storage_gib = int(self.node.try_get_context("taskEphemeralStorageGiB") or 20)
         task_cpu_large = int(self.node.try_get_context("taskCpuLarge") or 16384)
         task_memory_large_mib = int(self.node.try_get_context("taskMemoryLargeMiB") or 65536)
         state_machine_timeout_seconds = int(self.node.try_get_context("stateMachineTimeoutSeconds") or 32400)
@@ -48,7 +54,6 @@ class ComposeRunnerStack(Stack):
         if task_cpu_large >= 16384 and task_memory_large_mib < 32768:
             raise ValueError("taskMemoryLargeMiB must be at least 32768 MiB for 16 vCPU tasks.")
 
-        project_root = Path(__file__).resolve().parents[3]
         project_version = self.node.try_get_context("composeRunnerVersion")
         if not project_version:
             raise ValueError(
@@ -60,7 +65,6 @@ class ComposeRunnerStack(Stack):
                 "submitMemorySize cannot exceed 3008 MB when using the Python 3.13 Lambda runtime. "
                 "Pass a smaller value via `-c submitMemorySize=<mb>` or adjust the default."
             )
-        build_args = {"COMPOSE_RUNNER_VERSION": project_version}
 
         # Bucket for storing workflow artifacts.
         if results_bucket_name:
@@ -74,18 +78,20 @@ class ComposeRunnerStack(Stack):
                 block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
                 encryption=s3.BucketEncryption.S3_MANAGED,
                 enforce_ssl=True,
+                lifecycle_rules=[
+                    s3.LifecycleRule(
+                        id="TransitionResultsToIntelligentTiering",
+                        transitions=[
+                            s3.Transition(
+                                storage_class=s3.StorageClass.INTELLIGENT_TIERING,
+                                transition_after=Duration.days(0),
+                            )
+                        ],
+                    )
+                ],
                 versioned=True,
                 removal_policy=RemovalPolicy.RETAIN,
             )
-
-        # Build Docker image for ECS Fargate task.
-        fargate_asset = ecr_assets.DockerImageAsset(
-            self,
-            "ComposeRunnerFargateImage",
-            directory=str(project_root),
-            file="Dockerfile",
-            build_args=build_args,
-        )
 
         # Networking for ECS tasks (public subnets with internet access).
         vpc = ec2.Vpc(
@@ -119,20 +125,28 @@ class ComposeRunnerStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
 
+        task_definition_kwargs: dict[str, object] = {
+            "cpu": task_cpu,
+            "memory_limit_mib": task_memory_mib,
+        }
+        task_definition_large_kwargs: dict[str, object] = {
+            "cpu": task_cpu_large,
+            "memory_limit_mib": task_memory_large_mib,
+        }
+        if task_ephemeral_storage_gib > 20:
+            task_definition_kwargs["ephemeral_storage_gib"] = task_ephemeral_storage_gib
+            task_definition_large_kwargs["ephemeral_storage_gib"] = task_ephemeral_storage_gib
+
         task_definition = ecs.FargateTaskDefinition(
             self,
             "ComposeRunnerTaskDefinition",
-            cpu=task_cpu,
-            memory_limit_mib=task_memory_mib,
-            ephemeral_storage_gib=task_ephemeral_storage_gib,
+            **task_definition_kwargs,
         )
 
         task_definition_large = ecs.FargateTaskDefinition(
             self,
             "ComposeRunnerLargeTaskDefinition",
-            cpu=task_cpu_large,
-            memory_limit_mib=task_memory_large_mib,
-            ephemeral_storage_gib=task_ephemeral_storage_gib,
+            **task_definition_large_kwargs,
         )
 
         container_environment = {
@@ -143,7 +157,10 @@ class ComposeRunnerStack(Stack):
 
         container = task_definition.add_container(
             "ComposeRunnerContainer",
-            image=ecs.ContainerImage.from_docker_image_asset(fargate_asset),
+            image=ecs.ContainerImage.from_ecr_repository(
+                ecs_image_repository,
+                tag=project_version,
+            ),
             entry_point=["python", "-m", "compose_runner.ecs_task"],
             logging=ecs.LogDriver.aws_logs(
                 log_group=task_log_group,
@@ -154,7 +171,10 @@ class ComposeRunnerStack(Stack):
 
         container_large = task_definition_large.add_container(
             "ComposeRunnerLargeContainer",
-            image=ecs.ContainerImage.from_docker_image_asset(fargate_asset),
+            image=ecs.ContainerImage.from_ecr_repository(
+                ecs_image_repository,
+                tag=project_version,
+            ),
             entry_point=["python", "-m", "compose_runner.ecs_task"],
             logging=ecs.LogDriver.aws_logs(
                 log_group=task_log_group,
@@ -244,12 +264,16 @@ class ComposeRunnerStack(Stack):
             max_attempts=2,
         )
 
-        cost_check_code = lambda_.DockerImageCode.from_image_asset(
-            str(project_root),
-            file="aws_lambda/Dockerfile",
-            cmd=["compose_runner.aws_lambda.cost_check_handler.handler"],
-            build_args=build_args,
-        )
+        def lambda_image_code(handler: str | None = None) -> lambda_.DockerImageCode:
+            kwargs: dict[str, object] = {
+                "repository": lambda_image_repository,
+                "tag_or_digest": project_version,
+            }
+            if handler is not None:
+                kwargs["cmd"] = [handler]
+            return lambda_.DockerImageCode.from_ecr(**kwargs)
+
+        cost_check_code = lambda_image_code("compose_runner.aws_lambda.cost_check_handler.handler")
 
         cost_check_function = lambda_.DockerImageFunction(
             self,
@@ -322,11 +346,7 @@ class ComposeRunnerStack(Stack):
         )
 
         # Lambda image shared across handlers.
-        lambda_code = lambda_.DockerImageCode.from_image_asset(
-            str(project_root),
-            file="aws_lambda/Dockerfile",
-            build_args=build_args,
-        )
+        lambda_code = lambda_image_code()
 
         submit_function = lambda_.DockerImageFunction(
             self,
@@ -347,12 +367,7 @@ class ComposeRunnerStack(Stack):
             auth_type=lambda_.FunctionUrlAuthType.NONE,
         )
 
-        status_code = lambda_.DockerImageCode.from_image_asset(
-            str(project_root),
-            file="aws_lambda/Dockerfile",
-            cmd=["compose_runner.aws_lambda.status_handler.handler"],
-            build_args=build_args,
-        )
+        status_code = lambda_image_code("compose_runner.aws_lambda.status_handler.handler")
 
         status_function = lambda_.DockerImageFunction(
             self,
@@ -373,12 +388,7 @@ class ComposeRunnerStack(Stack):
             auth_type=lambda_.FunctionUrlAuthType.NONE,
         )
 
-        poll_code = lambda_.DockerImageCode.from_image_asset(
-            str(project_root),
-            file="aws_lambda/Dockerfile",
-            cmd=["compose_runner.aws_lambda.log_poll_handler.handler"],
-            build_args=build_args,
-        )
+        poll_code = lambda_image_code("compose_runner.aws_lambda.log_poll_handler.handler")
 
         poll_function = lambda_.DockerImageFunction(
             self,
@@ -405,12 +415,7 @@ class ComposeRunnerStack(Stack):
             auth_type=lambda_.FunctionUrlAuthType.NONE,
         )
 
-        results_code = lambda_.DockerImageCode.from_image_asset(
-            str(project_root),
-            file="aws_lambda/Dockerfile",
-            cmd=["compose_runner.aws_lambda.results_handler.handler"],
-            build_args=build_args,
-        )
+        results_code = lambda_image_code("compose_runner.aws_lambda.results_handler.handler")
 
         results_function = lambda_.DockerImageFunction(
             self,
@@ -441,5 +446,16 @@ class ComposeRunnerStack(Stack):
         cdk.CfnOutput(self, "ComposeRunnerResultsFunctionName", value=results_function.function_name)
         cdk.CfnOutput(self, "ComposeRunnerResultsFunctionUrl", value=results_function_url.url)
         cdk.CfnOutput(self, "ComposeRunnerResultsBucketName", value=results_bucket.bucket_name)
+        cdk.CfnOutput(
+            self,
+            "ComposeRunnerEcsImageRepositoryName",
+            value=ecs_image_repository.repository_name,
+        )
+        cdk.CfnOutput(
+            self,
+            "ComposeRunnerLambdaImageRepositoryName",
+            value=lambda_image_repository.repository_name,
+        )
+        cdk.CfnOutput(self, "ComposeRunnerImageTag", value=project_version)
         cdk.CfnOutput(self, "ComposeRunnerStateMachineArn", value=state_machine.state_machine_arn)
         cdk.CfnOutput(self, "ComposeRunnerTaskLogGroupName", value=task_log_group.log_group_name)

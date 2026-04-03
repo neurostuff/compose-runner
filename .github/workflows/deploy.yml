@@ -11,6 +11,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      ECS_IMAGE_REPOSITORY: compose-runner-ecs
+      LAMBDA_IMAGE_REPOSITORY: compose-runner-lambda
 
     steps:
       - name: Checkout
@@ -35,13 +38,72 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install AWS CDK CLI
-        run: npm install -g aws-cdk@2.130.0 --registry=https://registry.npmjs.org
+        run: npm install -g aws-cdk@2.1107.0 --registry=https://registry.npmjs.org
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy image repository stack
+        working-directory: infra/cdk
+        run: |
+          source .venv/bin/activate
+          cdk deploy \
+            ComposeRunnerImageRepositoriesStack \
+            --require-approval never
+
+      - name: Verify ComposeRunnerStack does not synthesize CDK Docker assets
+        working-directory: infra/cdk
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          source .venv/bin/activate
+          rm -rf /tmp/compose-runner-cdk-verify
+          cdk synth \
+            ComposeRunnerStack \
+            --output /tmp/compose-runner-cdk-verify \
+            -c composeRunnerVersion=${VERSION} >/dev/null
+          jq -e '(.dockerImages // {}) | length == 0' \
+            /tmp/compose-runner-cdk-verify/ComposeRunnerStack.assets.json >/dev/null || {
+              echo "ComposeRunnerStack synthesized Docker image assets; deployment would require the CDK bootstrap ECR repository."
+              cat /tmp/compose-runner-cdk-verify/ComposeRunnerStack.assets.json
+              exit 1
+          }
+
+      - name: Log in to Amazon ECR
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "ECR_REGISTRY=${ECR_REGISTRY}" >> "$GITHUB_ENV"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+      - name: Build and push release images
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            echo "Release tag name is required to publish ECR images"
+            exit 1
+          fi
+
+          ECS_IMAGE_URI="${ECR_REGISTRY}/${ECS_IMAGE_REPOSITORY}:${VERSION}"
+          LAMBDA_IMAGE_URI="${ECR_REGISTRY}/${LAMBDA_IMAGE_REPOSITORY}:${VERSION}"
+
+          docker build \
+            --file Dockerfile \
+            --build-arg COMPOSE_RUNNER_VERSION="${VERSION}" \
+            --tag "${ECS_IMAGE_URI}" \
+            .
+          docker push "${ECS_IMAGE_URI}"
+
+          docker build \
+            --file aws_lambda/Dockerfile \
+            --build-arg COMPOSE_RUNNER_VERSION="${VERSION}" \
+            --tag "${LAMBDA_IMAGE_URI}" \
+            .
+          docker push "${LAMBDA_IMAGE_URI}"
 
       - name: Deploy CDK stack
         working-directory: infra/cdk
@@ -50,10 +112,11 @@ jobs:
           TASK_CPU: 4096
           TASK_MEMORY_MIB: 30720
           STATE_MACHINE_TIMEOUT_SECONDS: 7200
+          VERSION: ${{ github.event.release.tag_name }}
         run: |
           source .venv/bin/activate
-          VERSION=${GITHUB_REF_NAME}
           cdk deploy \
+            ComposeRunnerStack \
             --require-approval never \
             --outputs-file cdk-outputs.json \
             -c composeRunnerVersion=${VERSION} \
@@ -112,3 +175,17 @@ jobs:
             echo "Status response missing status: $status_json"
             exit 1
           fi
+
+      - name: Garbage collect unused CDK bootstrap S3 assets
+        working-directory: infra/cdk
+        run: |
+          source .venv/bin/activate
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          cdk gc \
+            "aws://${AWS_ACCOUNT_ID}/${AWS_REGION}" \
+            --unstable=gc \
+            --type=s3 \
+            --action=full \
+            --created-buffer-days=7 \
+            --rollback-buffer-days=30 \
+            --confirm false
