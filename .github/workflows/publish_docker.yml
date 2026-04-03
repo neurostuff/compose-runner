@@ -21,6 +21,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -34,19 +41,32 @@ jobs:
         with:
           driver: docker
 
-      - name: Determine compose-runner version
-        id: get_version
+      - name: Build wheel from VCS version
         run: |
-          if [[ "${GITHUB_REF_TYPE}" == "branch" ]]; then
-            VERSION="${GITHUB_SHA::12}"
-          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-          elif [[ "${GITHUB_REF_TYPE}" == "release" ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-          else
-            VERSION="${GITHUB_SHA::12}"
+          python -m pip install --upgrade pip build
+          rm -rf dist
+          python -m build --wheel
+          ls -l dist
+
+      - name: Determine compose-runner version and Docker tags
+        id: version
+        run: |
+          VERSION=$(python - <<'PY'
+from pathlib import Path
+
+wheel = next(Path("dist").glob("*.whl")).name
+print(wheel.split("-")[1].replace("_", "-"))
+PY
+)
+          DOCKER_TAG="${VERSION//+/-}"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${VERSION}" ]]; then
+            echo "Wheel version ${VERSION} does not match git tag ${GITHUB_REF_NAME}"
+            exit 1
           fi
+
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "docker_tag=${DOCKER_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
@@ -54,7 +74,7 @@ jobs:
           context: .
           push: true
           build-args: |
-            COMPOSE_RUNNER_VERSION=${{ steps.get_version.outputs.version }}
+            COMPOSE_RUNNER_VERSION=${{ steps.version.outputs.version }}
           tags: |
-            ghcr.io/neurostuff/nsc-runner:${{ steps.get_version.outputs.version }}
-            ghcr.io/neurostuff/nsc-runner:${{ github.ref_name == 'main' && 'latest' || steps.get_version.outputs.version }}
+            ghcr.io/neurostuff/nsc-runner:${{ steps.version.outputs.docker_tag }}
+            ghcr.io/neurostuff/nsc-runner:${{ github.ref_name == 'main' && 'latest' || steps.version.outputs.docker_tag }}
