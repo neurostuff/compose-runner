@@ -51,14 +51,8 @@ jobs:
       - name: Determine compose-runner version and Docker tags
         id: version
         run: |
-          VERSION=$(python - <<'PY'
-from pathlib import Path
-
-wheel = next(Path("dist").glob("*.whl")).name
-print(wheel.split("-")[1].replace("_", "-"))
-PY
-)
-          DOCKER_TAG="${VERSION//+/-}"
+          VERSION=$(python -c 'from pathlib import Path; wheel = next(Path("dist").glob("*.whl")).name; print(wheel.split("-")[1].replace("_", "-"))')
+          DOCKER_TAG=$(printf '%s' "$VERSION" | tr '+' '-')
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${VERSION}" ]]; then
             echo "Wheel version ${VERSION} does not match git tag ${GITHUB_REF_NAME}"
@@ -67,6 +61,14 @@ PY
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "docker_tag=${DOCKER_TAG}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/neurostuff/nsc-runner:${DOCKER_TAG}"
+            if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+              echo "ghcr.io/neurostuff/nsc-runner:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
@@ -75,6 +77,4 @@ PY
           push: true
           build-args: |
             COMPOSE_RUNNER_VERSION=${{ steps.version.outputs.version }}
-          tags: |
-            ghcr.io/neurostuff/nsc-runner:${{ steps.version.outputs.docker_tag }}
-            ghcr.io/neurostuff/nsc-runner:${{ github.ref_name == 'main' && 'latest' || steps.version.outputs.docker_tag }}
+          tags: ${{ steps.version.outputs.tags }}

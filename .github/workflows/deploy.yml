@@ -34,14 +34,7 @@ jobs:
           rm -rf dist
           python -m build --wheel
 
-          WHEEL_PATH=$(ls dist/*.whl)
-          WHEEL_VERSION=$(python - <<'PY'
-from pathlib import Path
-
-wheel = next(Path("dist").glob("*.whl")).name
-print(wheel.split("-")[1].replace("_", "-"))
-PY
-)
+          WHEEL_VERSION=$(python -c 'from pathlib import Path; wheel = next(Path("dist").glob("*.whl")).name; print(wheel.split("-")[1].replace("_", "-"))')
 
           if [ "$WHEEL_VERSION" != "$RELEASE_TAG" ]; then
             echo "Wheel version $WHEEL_VERSION does not match release tag $RELEASE_TAG"
