@@ -178,17 +178,3 @@ jobs:
             echo "Status response missing status: $status_json"
             exit 1
           fi
-
-      - name: Garbage collect unused CDK bootstrap S3 assets
-        working-directory: infra/cdk
-        run: |
-          source .venv/bin/activate
-          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          cdk gc \
-            "aws://${AWS_ACCOUNT_ID}/${AWS_REGION}" \
-            --unstable=gc \
-            --type=s3 \
-            --action=full \
-            --created-buffer-days=7 \
-            --rollback-buffer-days=30 \
-            --confirm false
