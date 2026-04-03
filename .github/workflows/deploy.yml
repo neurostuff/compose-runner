@@ -48,10 +48,13 @@ jobs:
 
       - name: Deploy image repository stack
         working-directory: infra/cdk
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
         run: |
           source .venv/bin/activate
           cdk deploy \
             ComposeRunnerImageRepositoriesStack \
+            -c composeRunnerVersion=${VERSION} \
             --require-approval never
 
       - name: Verify ComposeRunnerStack does not synthesize CDK Docker assets
