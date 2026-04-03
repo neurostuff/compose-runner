@@ -2,29 +2,26 @@ FROM public.ecr.aws/docker/library/python:3.13-slim
 
 ARG COMPOSE_RUNNER_VERSION
 ENV COMPOSE_RUNNER_VERSION=${COMPOSE_RUNNER_VERSION}
-ENV HATCH_BUILD_VERSION=${COMPOSE_RUNNER_VERSION}
-ENV SETUPTOOLS_SCM_PRETEND_VERSION=${COMPOSE_RUNNER_VERSION}
-ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_COMPOSE_RUNNER=${COMPOSE_RUNNER_VERSION}
 LABEL org.opencontainers.image.title="compose-runner ecs task"
 LABEL org.opencontainers.image.version=${COMPOSE_RUNNER_VERSION}
 
 RUN test -n "$COMPOSE_RUNNER_VERSION" || (echo "COMPOSE_RUNNER_VERSION build arg is required" && exit 1)
 
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY pyproject.toml .
+COPY dist/*.whl /tmp/
 
-# install build backend and hatch
-RUN pip install --upgrade pip && pip install hatchling hatch-vcs hatch
+# Install runtime dependencies from pyproject and then install the prebuilt wheel.
+RUN pip install --upgrade pip && \
+    python - <<'PY' > requirements.txt
+import tomllib
+from pathlib import Path
 
-# export dependencies using hatch and install with pip
-RUN hatch dep show requirements > requirements.txt && pip install -r requirements.txt
+project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+requirements = list(project["dependencies"])
+requirements.extend(project.get("optional-dependencies", {}).get("aws", []))
+print("\n".join(requirements))
+PY
 
-COPY . .
-
-# install the package with AWS extras so the ECS task has boto3, etc.
-RUN pip install '.[aws]'
+RUN pip install -r requirements.txt && pip install --no-deps /tmp/*.whl
 
 ENTRYPOINT ["compose-run"]

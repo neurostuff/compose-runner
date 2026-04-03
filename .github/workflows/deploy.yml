@@ -18,11 +18,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Build release wheel from VCS tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python -m pip install --upgrade pip build
+          rm -rf dist
+          python -m build --wheel
+
+          WHEEL_PATH=$(ls dist/*.whl)
+          WHEEL_VERSION=$(python - <<'PY'
+from pathlib import Path
+
+wheel = next(Path("dist").glob("*.whl")).name
+print(wheel.split("-")[1].replace("_", "-"))
+PY
+)
+
+          if [ "$WHEEL_VERSION" != "$RELEASE_TAG" ]; then
+            echo "Wheel version $WHEEL_VERSION does not match release tag $RELEASE_TAG"
+            exit 1
+          fi
 
       - name: Set up Node
         uses: actions/setup-node@v4
