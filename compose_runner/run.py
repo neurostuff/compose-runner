@@ -1,5 +1,6 @@
 import compose_runner.sentry
 import gzip
+import hashlib
 import json
 import io
 import pickle
@@ -26,6 +27,37 @@ def gen_database_url(branch, database):
 class Runner:
     """Runner for executing and uploading a meta-analysis workflow."""
 
+    _TARGET_SPACE = "mni152_2mm"
+
+    _ENTITY_SNAPSHOT_KEYS = {
+        "studyset": ("studyset_snapshot", "studyset", "cached_studyset"),
+        "annotation": ("annotation_snapshot", "annotation", "cached_annotation"),
+    }
+    _ENTITY_STORE_PATHS = {
+        "studyset": "studysets",
+        "annotation": "annotations",
+    }
+    _ENTITY_SNAPSHOT_PATHS = {
+        "studyset": "studysets",
+        "annotation": "annotations",
+    }
+    _ENTITY_NEUROSTORE_KEYS = {
+        "studyset": ("neurostore_studyset", "neurostore_studyset_id", "studyset"),
+        "annotation": (
+            "neurostore_annotation",
+            "neurostore_annotation_id",
+            "annotation",
+        ),
+    }
+    _ENTITY_COMPOSE_PATHS = {
+        "studyset": "neurostore-studysets",
+        "annotation": "neurostore-annotations",
+    }
+    _ENTITY_COMPOSE_CHILD_KEYS = {
+        "studyset": "studysets",
+        "annotation": "annotations",
+    }
+
     def __init__(
         self,
         meta_analysis_id,
@@ -36,8 +68,16 @@ class Runner:
     ):
         # the meta-analysis id associated with this run
         self.meta_analysis_id = meta_analysis_id
-
-        if environment == "staging":
+        if environment == "development":
+            self.compose_url = "https://dev.synth.neurostore.xyz/api"
+            self.store_url = "https://dev.neurostore.xyz/api"
+            self.reference_studysets = {
+                "neurosynth": gen_database_url("staging", "neurosynth"),
+                "neuroquery": gen_database_url("staging", "neuroquery"),
+                "neurostore": gen_database_url("staging", "neurostore"),
+                "neurostore_small": gen_database_url("staging", "neurostore_small"),
+            }
+        elif environment == "staging":
             # staging
             self.compose_url = "https://synth.neurostore.xyz/api"
             self.store_url = "https://neurostore.xyz/api"
@@ -80,6 +120,10 @@ class Runner:
         self.cached_studyset = None
         self.cached_annotation = None
         self.cached_specification = None
+        self.existing_studyset_snapshot = None
+        self.existing_annotation_snapshot = None
+        self.existing_studyset_snapshot_id = None
+        self.existing_annotation_snapshot_id = None
         self.first_studyset = None
         self.second_studyset = None
         self.estimator = None
@@ -113,67 +157,295 @@ class Runner:
             self.create_result_object()
             self.upload_results()
 
-    def download_bundle(self):
-        meta_analysis_resp = requests.get(
-            f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true"
-        )
+    def _get_json(self, url, error_message):
+        response = requests.get(url)
         try:
-            meta_analysis_resp.raise_for_status()
+            response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            raise requests.exceptions.HTTPError(
-                f"Could not download meta-analysis {self.meta_analysis_id}"
-            ) from e
-        meta_analysis = meta_analysis_resp.json()
+            raise requests.exceptions.HTTPError(error_message) from e
+        return response.json()
+
+    @staticmethod
+    def _unwrap_snapshot(payload):
+        current = payload
+        while isinstance(current, dict):
+            snapshot = current.get("snapshot")
+            if not isinstance(snapshot, dict):
+                snapshot = current.get("cached")
+            if not isinstance(snapshot, dict) or snapshot is current:
+                break
+            current = snapshot
+        return current if isinstance(current, dict) else None
+
+    @staticmethod
+    def _extract_document_id(payload):
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            payload_id = payload.get("id")
+            if isinstance(payload_id, str):
+                return payload_id
+        return None
+
+    @staticmethod
+    def _is_studyset_snapshot(payload):
+        return isinstance(payload, dict) and isinstance(payload.get("studies"), list)
+
+    @staticmethod
+    def _is_annotation_snapshot(payload):
+        return isinstance(payload, dict) and isinstance(payload.get("notes"), list)
+
+    def _get_result_documents(self, meta_analysis):
+        result_documents = []
+        seen_ids = set()
+        result_refs = list(meta_analysis.get("snapshots") or [])
+        result_refs.extend(meta_analysis.get("results") or [])
+
+        for result_ref in reversed(result_refs):
+            if isinstance(result_ref, str):
+                result_id = result_ref
+                result_doc = None
+            elif isinstance(result_ref, dict):
+                result_id = result_ref.get("id")
+                result_doc = result_ref
+            else:
+                continue
+
+            if result_id in seen_ids:
+                continue
+            if result_id is not None:
+                seen_ids.add(result_id)
+
+            has_snapshot_payload = any(
+                isinstance(result_doc.get(key), dict)
+                for key in self._ENTITY_SNAPSHOT_KEYS["studyset"]
+                + self._ENTITY_SNAPSHOT_KEYS["annotation"]
+            ) if isinstance(result_doc, dict) else False
+
+            if result_doc is None or (result_id is not None and not has_snapshot_payload):
+                if result_id is None:
+                    continue
+                result_doc = self._get_json(
+                    f"{self.compose_url}/meta-analysis-results/{result_id}",
+                    f"Could not download meta-analysis result {result_id}",
+                )
+
+            result_documents.append(result_doc)
+
+        return result_documents
+
+    def _get_project_document(self, meta_analysis):
+        project = meta_analysis.get("project")
+        if isinstance(project, dict):
+            return project
+        if isinstance(project, str):
+            return self._get_json(
+                f"{self.compose_url}/projects/{project}",
+                f"Could not download project {project}",
+            )
+        return None
+
+    def _get_entity_snapshot_record(self, entity_name, documents):
+        is_expected_snapshot = (
+            self._is_studyset_snapshot
+            if entity_name == "studyset"
+            else self._is_annotation_snapshot
+        )
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            for key in self._ENTITY_SNAPSHOT_KEYS[entity_name]:
+                snapshot_document = document.get(key)
+                payload = self._unwrap_snapshot(snapshot_document)
+                if is_expected_snapshot(payload):
+                    return payload, self._extract_document_id(snapshot_document)
+                snapshot_id = self._extract_document_id(snapshot_document)
+                if snapshot_id is None:
+                    continue
+                try:
+                    snapshot_document = self._get_json(
+                        f"{self.compose_url}/{self._ENTITY_SNAPSHOT_PATHS[entity_name]}/{snapshot_id}",
+                        f"Could not download {entity_name} snapshot {snapshot_id}",
+                    )
+                except requests.exceptions.HTTPError:
+                    continue
+                payload = self._unwrap_snapshot(snapshot_document)
+                if is_expected_snapshot(payload):
+                    return payload, self._extract_document_id(snapshot_document) or snapshot_id
+        return None, None
+
+    @staticmethod
+    def _extract_neurostore_id(payload):
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            neurostore_id = payload.get("neurostore_id")
+            if isinstance(neurostore_id, str):
+                return neurostore_id
+            payload_id = payload.get("id")
+            if isinstance(payload_id, str):
+                return payload_id
+        return None
+
+    def _get_neurostore_id(self, entity_name, documents):
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            for key in self._ENTITY_NEUROSTORE_KEYS[entity_name]:
+                neurostore_id = self._extract_neurostore_id(document.get(key))
+                if neurostore_id is not None:
+                    return neurostore_id
+        return None
+
+    def _get_compose_neurostore_document(self, entity_name, documents):
+        compose_document = None
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            for key in self._ENTITY_NEUROSTORE_KEYS[entity_name]:
+                payload = document.get(key)
+                if isinstance(payload, dict):
+                    compose_document = payload
+                    break
+                compose_id = self._extract_neurostore_id(payload)
+                if compose_id is not None:
+                    compose_document = self._get_json(
+                        f"{self.compose_url}/{self._ENTITY_COMPOSE_PATHS[entity_name]}/{compose_id}",
+                        f"Could not download {entity_name} compose link {compose_id}",
+                    )
+                    break
+            if compose_document is not None:
+                break
+        return compose_document
+
+    def _get_compose_child_neurostore_id(self, entity_name, documents):
+        compose_document = self._get_compose_neurostore_document(entity_name, documents)
+        if not isinstance(compose_document, dict):
+            return None
+        child_key = self._ENTITY_COMPOSE_CHILD_KEYS[entity_name]
+        child_documents = compose_document.get(child_key) or []
+        for child_document in child_documents:
+            child_id = self._extract_neurostore_id(child_document)
+            if child_id is not None:
+                return child_id
+        return None
+
+    def _download_entity_from_store(self, entity_name, entity_id, documents):
+        try:
+            return self._get_json(
+                f"{self.store_url}/{self._ENTITY_STORE_PATHS[entity_name]}/{entity_id}"
+                f"{'?nested=true' if entity_name == 'studyset' else ''}",
+                f"Could not download {entity_name} {entity_id}",
+            )
+        except requests.exceptions.HTTPError as direct_error:
+            linked_entity_id = self._get_compose_child_neurostore_id(entity_name, documents)
+            if linked_entity_id is None or linked_entity_id == entity_id:
+                raise
+            try:
+                return self._get_json(
+                    f"{self.store_url}/{self._ENTITY_STORE_PATHS[entity_name]}/{linked_entity_id}"
+                    f"{'?nested=true' if entity_name == 'studyset' else ''}",
+                    f"Could not download {entity_name} {linked_entity_id}",
+                )
+            except requests.exceptions.HTTPError:
+                raise direct_error
+
+    def _collect_entity_records(self, documents):
+        records = {}
+        for entity_name in self._ENTITY_STORE_PATHS:
+            snapshot, snapshot_id = self._get_entity_snapshot_record(entity_name, documents)
+            records[entity_name] = {
+                "snapshot": snapshot,
+                "snapshot_id": snapshot_id,
+                "neurostore_id": self._get_neurostore_id(entity_name, documents),
+            }
+        return records
+
+    def _apply_entity_records(self, records):
+        self.existing_studyset_snapshot = records["studyset"]["snapshot"]
+        self.existing_studyset_snapshot_id = records["studyset"]["snapshot_id"]
+        self.existing_annotation_snapshot = records["annotation"]["snapshot"]
+        self.existing_annotation_snapshot_id = records["annotation"]["snapshot_id"]
+
+    @staticmethod
+    def _snapshot_md5(payload):
+        serialized_payload = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.md5(serialized_payload.encode("utf-8")).hexdigest()
+
+    def _should_link_existing_snapshot(self, live_payload, existing_payload, existing_id):
+        if existing_id is None or existing_payload is None:
+            return False
+        return self._snapshot_md5(live_payload) == self._snapshot_md5(existing_payload)
+
+    def download_bundle(self):
+        meta_analysis = self._get_json(
+            f"{self.compose_url}/meta-analyses/{self.meta_analysis_id}?nested=true",
+            f"Could not download meta-analysis {self.meta_analysis_id}",
+        )
         # meta_analysis = self.compose_api.meta_analyses_id_get(
         #     id=self.meta_analysis_id, nested=True
         # ).to_dict()  # does not currently return run_key
 
-        # check to see if studyset and annotation are cached
-        studyset_dict = annotation_dict = None
-        if meta_analysis["studyset"]:
-            studyset_dict = meta_analysis["studyset"]["snapshot"]
-            self.cached_studyset = (
-                None if studyset_dict is None else studyset_dict.get("snapshot", None)
-            )
-        if meta_analysis["annotation"]:
-            annotation_dict = meta_analysis["annotation"]["snapshot"]
-            self.cached_annotation = (
-                None
-                if annotation_dict is None
-                else annotation_dict.get("snapshot", None)
-            )
-        # if either are not cached, download them from neurostore
-        if self.cached_studyset is None or self.cached_annotation is None:
-            cached_studyset_resp = requests.get(
-                (
-                    f"{self.store_url}/studysets/"
-                    f"{meta_analysis['studyset']['neurostore_id']}?nested=true"
-                )
-            )
-            try:
-                cached_studyset_resp.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                raise requests.exceptions.HTTPError(
-                    f"Could not download studyset {meta_analysis['studyset']['neurostore_id']}"
-                ) from e
-            self.cached_studyset = cached_studyset_resp.json()
+        documents = [meta_analysis]
+        entity_records = self._collect_entity_records(documents)
+        self._apply_entity_records(entity_records)
+        neurostore_documents = list(documents)
+        should_fetch_result_documents = any(
+            record["snapshot"] is None or record["neurostore_id"] is None
+            for record in entity_records.values()
+        )
+        if should_fetch_result_documents:
+            result_documents = self._get_result_documents(meta_analysis)
+            if result_documents:
+                documents.extend(result_documents)
+                neurostore_documents = list(documents)
+                entity_records = self._collect_entity_records(documents)
+                self._apply_entity_records(entity_records)
 
-            cached_annotation_resp = requests.get(
-                (
-                    f"{self.store_url}/annotations/"
-                    f"{meta_analysis['annotation']['neurostore_id']}"
-                )
-            )
-            try:
-                cached_annotation_resp.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                raise requests.exceptions.HTTPError(
-                    f"Could not download annotation {meta_analysis['annotation']['neurostore_id']}"
-                ) from e
+        if any(record["neurostore_id"] is None for record in entity_records.values()):
+            project_document = self._get_project_document(meta_analysis)
+            neurostore_documents.append(project_document)
+            entity_records = self._collect_entity_records(neurostore_documents)
+            self._apply_entity_records(entity_records)
 
-            self.cached_annotation = cached_annotation_resp.json()
-            # set cached to false
-            self.cached = False
+        if all(record["neurostore_id"] is not None for record in entity_records.values()):
+            try:
+                self.cached_studyset = self._download_entity_from_store(
+                    "studyset",
+                    entity_records["studyset"]["neurostore_id"],
+                    neurostore_documents,
+                )
+                self.cached_annotation = self._download_entity_from_store(
+                    "annotation",
+                    entity_records["annotation"]["neurostore_id"],
+                    neurostore_documents,
+                )
+                self.cached = False
+            except requests.exceptions.RequestException:
+                if (
+                    self.existing_studyset_snapshot is None
+                    or self.existing_annotation_snapshot is None
+                ):
+                    raise
+                self.cached_studyset = self.existing_studyset_snapshot
+                self.cached_annotation = self.existing_annotation_snapshot
+                self.cached = True
+        elif (
+            self.existing_studyset_snapshot is not None
+            and self.existing_annotation_snapshot is not None
+        ):
+            self.cached_studyset = self.existing_studyset_snapshot
+            self.cached_annotation = self.existing_annotation_snapshot
+            self.cached = True
+        else:
+            raise ValueError(
+                "Could not resolve studyset and annotation sources for "
+                f"{self.meta_analysis_id}"
+            )
         # retrieve specification
         self.cached_specification = meta_analysis["specification"]
 
@@ -265,7 +537,7 @@ class Runner:
                 # Load the JSON data into a dictionary
                 reference_studyset_dict = json.loads(json_data)
 
-            reference_studyset = Studyset(reference_studyset_dict)
+            reference_studyset = Studyset(reference_studyset_dict, target=self._TARGET_SPACE)
 
             del reference_studyset_dict
             # get study ids from studyset
@@ -289,7 +561,7 @@ class Runner:
             return first_studyset, second_studyset
 
     def process_bundle(self, n_cores=None):
-        studyset = Studyset(self.cached_studyset)
+        studyset = Studyset(self.cached_studyset, target=self._TARGET_SPACE)
         annotation = Annotation(self.cached_annotation, studyset)
         first_studyset, second_studyset = self.apply_filter(studyset, annotation)
         estimator, corrector = self.load_specification(n_cores=n_cores)
@@ -299,21 +571,36 @@ class Runner:
         self.corrector = corrector
 
     def create_result_object(self):
-        # take a snapshot of the studyset and annotation (before running the workflow)
         headers = {"Compose-Upload-Key": self.nsc_key}
         data = {"meta_analysis_id": self.meta_analysis_id}
-        if not self.cached:
-            data.update(
-                {
-                    "studyset_snapshot": self.cached_studyset,
-                    "annotation_snapshot": self.cached_annotation,
-                }
-            )
+        entity_payloads = {
+            "studyset": (
+                self.cached_studyset,
+                self.existing_studyset_snapshot,
+                self.existing_studyset_snapshot_id,
+            ),
+            "annotation": (
+                self.cached_annotation,
+                self.existing_annotation_snapshot,
+                self.existing_annotation_snapshot_id,
+            ),
+        }
+        for entity_name, (live_payload, existing_payload, existing_id) in entity_payloads.items():
+            if self._should_link_existing_snapshot(
+                live_payload,
+                existing_payload,
+                existing_id,
+            ):
+                data[f"cached_{entity_name}"] = existing_id
+            else:
+                data[f"{entity_name}_snapshot"] = live_payload
+
         resp = requests.post(
             f"{self.compose_url}/meta-analysis-results",
             json=data,
             headers=headers,
         )
+        resp.raise_for_status()
         self.result_id = resp.json().get("id", None)
         if self.result_id is None:
             raise ValueError(f"Could not create result for {self.meta_analysis_id}")
@@ -340,7 +627,9 @@ class Runner:
             self.meta_results = workflow.fit(self.first_studyset)
         else:
             raise ValueError(
-                f"Estimator {self.estimator} and studysets {self.first_studyset} and {self.second_studyset} are not compatible."
+                "Estimator "
+                f"{self.estimator} and studysets {self.first_studyset} and "
+                f"{self.second_studyset} are not compatible."
             )
         self._persist_meta_results()
 
