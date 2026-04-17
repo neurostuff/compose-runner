@@ -82,10 +82,12 @@ def test_process_bundle_keeps_studysets(monkeypatch):
     second_studyset = object()
     estimator = object()
     corrector = object()
+    observed = {}
 
     class FakeStudyset:
-        def __init__(self, source):
+        def __init__(self, source, target=None):
             self.source = source
+            self.target = target
 
     class FakeAnnotation:
         def __init__(self, source, studyset):
@@ -95,6 +97,7 @@ def test_process_bundle_keeps_studysets(monkeypatch):
     def fake_apply_filter(self, studyset, annotation):
         assert isinstance(studyset, FakeStudyset)
         assert isinstance(annotation, FakeAnnotation)
+        observed["studyset"] = studyset
         return first_studyset, second_studyset
 
     def fake_load_specification(self, n_cores=None):
@@ -116,11 +119,14 @@ def test_process_bundle_keeps_studysets(monkeypatch):
     assert runner.second_studyset is second_studyset
     assert runner.estimator is estimator
     assert runner.corrector is corrector
+    assert observed["studyset"].target == runner._TARGET_SPACE
 
 
 def test_download_bundle_supports_legacy_snapshot_shape(monkeypatch):
     runner = Runner(meta_analysis_id="legacy-meta-analysis", environment="staging")
     meta_analysis = {
+        "results": [{"id": "unused-result"}],
+        "snapshots": [],
         "studyset": {
             "snapshot": {"snapshot": {"id": "studyset", "studies": []}},
             "neurostore_id": "legacy-studyset",
@@ -142,6 +148,7 @@ def test_download_bundle_supports_legacy_snapshot_shape(monkeypatch):
 
     def fake_get(url):
         requested_urls.append(url)
+        assert url != f"{runner.compose_url}/meta-analysis-results/unused-result"
         payloads = {
             (
                 f"{runner.compose_url}/meta-analyses/"

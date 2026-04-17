@@ -27,9 +27,11 @@ def gen_database_url(branch, database):
 class Runner:
     """Runner for executing and uploading a meta-analysis workflow."""
 
+    _TARGET_SPACE = "mni152_2mm"
+
     _ENTITY_SNAPSHOT_KEYS = {
-        "studyset": ("studyset_snapshot", "cached_studyset", "studyset"),
-        "annotation": ("annotation_snapshot", "cached_annotation", "annotation"),
+        "studyset": ("studyset_snapshot", "studyset", "cached_studyset"),
+        "annotation": ("annotation_snapshot", "annotation", "cached_annotation"),
     }
     _ENTITY_STORE_PATHS = {
         "studyset": "studysets",
@@ -243,10 +245,6 @@ class Runner:
             )
         return None
 
-    def _get_entity_snapshot(self, entity_name, documents):
-        snapshot, _ = self._get_entity_snapshot_record(entity_name, documents)
-        return snapshot
-
     def _get_entity_snapshot_record(self, entity_name, documents):
         is_expected_snapshot = (
             self._is_studyset_snapshot
@@ -352,6 +350,23 @@ class Runner:
             except requests.exceptions.HTTPError:
                 raise direct_error
 
+    def _collect_entity_records(self, documents):
+        records = {}
+        for entity_name in self._ENTITY_STORE_PATHS:
+            snapshot, snapshot_id = self._get_entity_snapshot_record(entity_name, documents)
+            records[entity_name] = {
+                "snapshot": snapshot,
+                "snapshot_id": snapshot_id,
+                "neurostore_id": self._get_neurostore_id(entity_name, documents),
+            }
+        return records
+
+    def _apply_entity_records(self, records):
+        self.existing_studyset_snapshot = records["studyset"]["snapshot"]
+        self.existing_studyset_snapshot_id = records["studyset"]["snapshot_id"]
+        self.existing_annotation_snapshot = records["annotation"]["snapshot"]
+        self.existing_annotation_snapshot_id = records["annotation"]["snapshot_id"]
+
     @staticmethod
     def _snapshot_md5(payload):
         serialized_payload = json.dumps(
@@ -375,36 +390,42 @@ class Runner:
         #     id=self.meta_analysis_id, nested=True
         # ).to_dict()  # does not currently return run_key
 
-        result_documents = self._get_result_documents(meta_analysis)
-        documents = [meta_analysis, *result_documents]
-
-        self.existing_studyset_snapshot, self.existing_studyset_snapshot_id = (
-            self._get_entity_snapshot_record("studyset", documents)
-        )
-        self.existing_annotation_snapshot, self.existing_annotation_snapshot_id = (
-            self._get_entity_snapshot_record("annotation", documents)
-        )
-
+        documents = [meta_analysis]
+        entity_records = self._collect_entity_records(documents)
+        self._apply_entity_records(entity_records)
         neurostore_documents = list(documents)
-        studyset_id = self._get_neurostore_id("studyset", neurostore_documents)
-        annotation_id = self._get_neurostore_id("annotation", neurostore_documents)
+        should_fetch_result_documents = any(
+            record["snapshot"] is None or record["neurostore_id"] is None
+            for record in entity_records.values()
+        )
+        if should_fetch_result_documents:
+            result_documents = self._get_result_documents(meta_analysis)
+            if result_documents:
+                documents.extend(result_documents)
+                neurostore_documents = list(documents)
+                entity_records = self._collect_entity_records(documents)
+                self._apply_entity_records(entity_records)
 
-        if studyset_id is None or annotation_id is None:
+        if any(record["neurostore_id"] is None for record in entity_records.values()):
             project_document = self._get_project_document(meta_analysis)
             neurostore_documents.append(project_document)
-            studyset_id = self._get_neurostore_id("studyset", neurostore_documents)
-            annotation_id = self._get_neurostore_id("annotation", neurostore_documents)
+            entity_records = self._collect_entity_records(neurostore_documents)
+            self._apply_entity_records(entity_records)
 
-        if studyset_id is not None and annotation_id is not None:
+        if all(record["neurostore_id"] is not None for record in entity_records.values()):
             try:
                 self.cached_studyset = self._download_entity_from_store(
-                    "studyset", studyset_id, neurostore_documents
+                    "studyset",
+                    entity_records["studyset"]["neurostore_id"],
+                    neurostore_documents,
                 )
                 self.cached_annotation = self._download_entity_from_store(
-                    "annotation", annotation_id, neurostore_documents
+                    "annotation",
+                    entity_records["annotation"]["neurostore_id"],
+                    neurostore_documents,
                 )
                 self.cached = False
-            except requests.exceptions.HTTPError:
+            except requests.exceptions.RequestException:
                 if (
                     self.existing_studyset_snapshot is None
                     or self.existing_annotation_snapshot is None
@@ -516,7 +537,7 @@ class Runner:
                 # Load the JSON data into a dictionary
                 reference_studyset_dict = json.loads(json_data)
 
-            reference_studyset = Studyset(reference_studyset_dict)
+            reference_studyset = Studyset(reference_studyset_dict, target=self._TARGET_SPACE)
 
             del reference_studyset_dict
             # get study ids from studyset
@@ -540,7 +561,7 @@ class Runner:
             return first_studyset, second_studyset
 
     def process_bundle(self, n_cores=None):
-        studyset = Studyset(self.cached_studyset)
+        studyset = Studyset(self.cached_studyset, target=self._TARGET_SPACE)
         annotation = Annotation(self.cached_annotation, studyset)
         first_studyset, second_studyset = self.apply_filter(studyset, annotation)
         estimator, corrector = self.load_specification(n_cores=n_cores)
@@ -550,26 +571,29 @@ class Runner:
         self.corrector = corrector
 
     def create_result_object(self):
-        # take a snapshot of the studyset and annotation (before running the workflow)
         headers = {"Compose-Upload-Key": self.nsc_key}
         data = {"meta_analysis_id": self.meta_analysis_id}
-        if self._should_link_existing_snapshot(
-            self.cached_studyset,
-            self.existing_studyset_snapshot,
-            self.existing_studyset_snapshot_id,
-        ):
-            data["cached_studyset"] = self.existing_studyset_snapshot_id
-        else:
-            data["studyset_snapshot"] = self.cached_studyset
-
-        if self._should_link_existing_snapshot(
-            self.cached_annotation,
-            self.existing_annotation_snapshot,
-            self.existing_annotation_snapshot_id,
-        ):
-            data["cached_annotation"] = self.existing_annotation_snapshot_id
-        else:
-            data["annotation_snapshot"] = self.cached_annotation
+        entity_payloads = {
+            "studyset": (
+                self.cached_studyset,
+                self.existing_studyset_snapshot,
+                self.existing_studyset_snapshot_id,
+            ),
+            "annotation": (
+                self.cached_annotation,
+                self.existing_annotation_snapshot,
+                self.existing_annotation_snapshot_id,
+            ),
+        }
+        for entity_name, (live_payload, existing_payload, existing_id) in entity_payloads.items():
+            if self._should_link_existing_snapshot(
+                live_payload,
+                existing_payload,
+                existing_id,
+            ):
+                data[f"cached_{entity_name}"] = existing_id
+            else:
+                data[f"{entity_name}_snapshot"] = live_payload
 
         resp = requests.post(
             f"{self.compose_url}/meta-analysis-results",
