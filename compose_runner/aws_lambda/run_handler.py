@@ -36,7 +36,9 @@ def _log(job_id: str, message: str, **details: Any) -> None:
 def _compose_api_base_url(environment: str) -> str:
     env = (environment or "production").lower()
     if env == "staging":
-        return "https://synth.neurostore.xyz/api"
+        return "https://staging.synth.neurostore.xyz/api"
+    if env == "development":
+        return "https://dev.synth.neurostore.xyz/api"
     if env == "local":
         return "http://localhost:81/api"
     return "https://compose.neurosynth.org/api"
