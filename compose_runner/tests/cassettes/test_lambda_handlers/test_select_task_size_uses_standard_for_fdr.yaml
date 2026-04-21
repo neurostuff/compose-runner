@@ -5,44 +5,87 @@ interactions:
       Connection:
       - close
       Host:
-      - synth.neurostore.xyz
+      - staging.synth.neurostore.xyz
       User-Agent:
       - compose-runner/submit
     method: GET
-    uri: https://synth.neurostore.xyz/api/meta-analyses/VtFZJFniCKvG?nested=true
+    uri: https://staging.synth.neurostore.xyz/api/meta-analyses/ataCTPAt2LMw?nested=true
   response:
     body:
-      string: '{"id": "VtFZJFniCKvG", "created_at": "2025-10-21T14:10:35.309383+00:00",
-        "updated_at": null, "user": "github|12564882", "username": "James Kent", "name":
-        "Untitled MKDADensity Meta Analysis: included (1)", "description": "MKDADensity
-        meta analysis with FDRCorrector", "provenance": null, "specification": {"id":
-        "DtVzKEKGaXLu", "created_at": "2025-10-21T14:10:34.564365+00:00", "updated_at":
-        null, "user": "github|12564882", "username": "James Kent", "type": "CBMA",
-        "estimator": {"type": "MKDADensity", "args": {"null_method": "approximate",
-        "n_iters": 5000, "**kwargs": {}, "kernel__r": 10, "kernel__value": 1}}, "database_studyset":
-        null, "filter": "included", "corrector": {"type": "FDRCorrector", "args":
-        {"method": "indep", "alpha": 0.05}}, "conditions": [true], "weights": [1.0]},
-        "neurostore_analysis": {"id": "564c8kRnJVT4", "created_at": "2025-10-21T14:10:35.325173+00:00",
-        "updated_at": null, "neurostore_id": null, "exception": null, "traceback":
-        null, "status": "PENDING"}, "studyset": {"id": "FA3BDBdGRZ5d", "created_at":
-        "2025-10-21T14:10:34.821625+00:00", "updated_at": null, "user": "github|12564882",
-        "username": "James Kent", "snapshot": null, "neurostore_id": "3EmvH2LELwR2",
-        "version": null, "url": "https://neurostore.org/api/studysets/3EmvH2LELwR2"},
-        "annotation": {"id": "XELVYV7ftp7e", "created_at": "2025-10-21T14:10:35.183354+00:00",
-        "updated_at": null, "user": "github|12564882", "username": "James Kent", "snapshot":
-        null, "neurostore_id": "TebrRstj8ofh", "studyset": "3EmvH2LELwR2", "url":
-        "https://neurostore.org/api/annotations/TebrRstj8ofh"}, "project": "D2cTfoxNfpLy",
-        "cached_studyset": "FA3BDBdGRZ5d", "cached_annotation": "XELVYV7ftp7e", "run_key":
-        "V_jTcP2zfNlWD4KhwKKcJw", "results": [], "neurostore_url": null}'
+      string: "{\"id\":\"ataCTPAt2LMw\",\"created_at\":\"2026-02-18T13:37:47.126359+00:00\",\"updated_at\":null,\"user\":\"google-oauth2|118369890595388226948\",\"username\":\"Melike
+        DEM\u0130R\",\"name\":\"Untitled MKDADensity Meta Analysis: included\",\"description\":\"MKDADensity
+        meta analysis with FDRCorrector\",\"public\":true,\"provenance\":null,\"tags\":[],\"specification\":{\"id\":\"Ahx3YQYb8Jx4\",\"created_at\":\"2026-02-18T13:37:46.199314+00:00\",\"updated_at\":null,\"user\":\"google-oauth2|118369890595388226948\",\"username\":\"Melike
+        DEM\u0130R\",\"type\":\"CBMA\",\"estimator\":{\"type\":\"MKDADensity\",\"args\":{\"null_method\":\"approximate\",\"n_iters\":5000,\"**kwargs\":{},\"kernel__r\":10,\"kernel__value\":1}},\"database_studyset\":null,\"filter\":\"included\",\"corrector\":{\"type\":\"FDRCorrector\",\"args\":{\"method\":\"indep\",\"alpha\":0.05}},\"conditions\":[\"true\"],\"weights\":[1.0]},\"neurostore_analysis\":{\"created_at\":\"2026-02-18T13:37:47.132932+00:00\",\"updated_at\":\"2026-04-21T01:52:18.670671+00:00\",\"neurostore_id\":\"cmc3KDLwQCf3\",\"exception\":\"HTTPConnectionPool(host='store_nginx',
+        port=80): Max retries exceeded with url: /api/analyses/cmc3KDLwQCf3 (Caused
+        by NameResolutionError(\\\"HTTPConnection(host='store_nginx', port=80): Failed
+        to resolve 'store_nginx' ([Errno -3] Temporary failure in name resolution)\\\"))\",\"traceback\":\"Traceback
+        (most recent call last):\\n  File \\\"/usr/local/lib/python3.14/site-packages/urllib3/connection.py\\\",
+        line 204, in _new_conn\\n    sock = connection.create_connection(\\n        (self._dns_host,
+        self.port),\\n    ...<2 lines>...\\n        socket_options=self.socket_options,\\n
+        \   )\\n  File \\\"/usr/local/lib/python3.14/site-packages/urllib3/util/connection.py\\\",
+        line 60, in create_connection\\n    for res in socket.getaddrinfo(host, port,
+        family, socket.SOCK_STREAM):\\n               ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n
+        \ File \\\"/usr/local/lib/python3.14/socket.py\\\", line 983, in getaddrinfo\\n
+        \   for res in _socket.getaddrinfo(host, port, family, type, proto, flags):\\n
+        \              ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\nsocket.gaierror:
+        [Errno -3] Temporary failure in name resolution\\n\\nThe above exception was
+        the direct cause of the following exception:\\n\\nTraceback (most recent call
+        last):\\n  File \\\"/usr/local/lib/python3.14/site-packages/urllib3/connectionpool.py\\\",
+        line 787, in urlopen\\n    response = self._make_request(\\n        conn,\\n
+        \   ...<10 lines>...\\n        **response_kw,\\n    )\\n  File \\\"/usr/local/lib/python3.14/site-packages/urllib3/connectionpool.py\\\",
+        line 493, in _make_request\\n    conn.request(\\n    ~~~~~~~~~~~~^\\n        method,\\n
+        \       ^^^^^^^\\n    ...<6 lines>...\\n        enforce_content_length=enforce_content_length,\\n
+        \       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n    )\\n    ^\\n
+        \ File \\\"/usr/local/lib/python3.14/site-packages/urllib3/connection.py\\\",
+        line 500, in request\\n    self.endheaders()\\n    ~~~~~~~~~~~~~~~^^\\n  File
+        \\\"/usr/local/lib/python3.14/http/client.py\\\", line 1353, in endheaders\\n
+        \   self._send_output(message_body, encode_chunked=encode_chunked)\\n    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n
+        \ File \\\"/usr/local/lib/python3.14/http/client.py\\\", line 1113, in _send_output\\n
+        \   self.send(msg)\\n    ~~~~~~~~~^^^^^\\n  File \\\"/usr/local/lib/python3.14/http/client.py\\\",
+        line 1057, in send\\n    self.connect()\\n    ~~~~~~~~~~~~^^\\n  File \\\"/usr/local/lib/python3.14/site-packages/urllib3/connection.py\\\",
+        line 331, in connect\\n    self.sock = self._new_conn()\\n                ~~~~~~~~~~~~~~^^\\n
+        \ File \\\"/usr/local/lib/python3.14/site-packages/urllib3/connection.py\\\",
+        line 211, in _new_conn\\n    raise NameResolutionError(self.host, self, e)
+        from e\\nurllib3.exceptions.NameResolutionError: HTTPConnection(host='store_nginx',
+        port=80): Failed to resolve 'store_nginx' ([Errno -3] Temporary failure in
+        name resolution)\\n\\nThe above exception was the direct cause of the following
+        exception:\\n\\nTraceback (most recent call last):\\n  File \\\"/usr/local/lib/python3.14/site-packages/requests/adapters.py\\\",
+        line 645, in send\\n    resp = conn.urlopen(\\n        method=request.method,\\n
+        \   ...<9 lines>...\\n        chunked=chunked,\\n    )\\n  File \\\"/usr/local/lib/python3.14/site-packages/urllib3/connectionpool.py\\\",
+        line 841, in urlopen\\n    retries = retries.increment(\\n        method,
+        url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]\\n    )\\n  File
+        \\\"/usr/local/lib/python3.14/site-packages/urllib3/util/retry.py\\\", line
+        535, in increment\\n    raise MaxRetryError(_pool, url, reason) from reason
+        \ # type: ignore[arg-type]\\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\nurllib3.exceptions.MaxRetryError:
+        HTTPConnectionPool(host='store_nginx', port=80): Max retries exceeded with
+        url: /api/analyses/cmc3KDLwQCf3 (Caused by NameResolutionError(\\\"HTTPConnection(host='store_nginx',
+        port=80): Failed to resolve 'store_nginx' ([Errno -3] Temporary failure in
+        name resolution)\\\"))\\n\\nDuring handling of the above exception, another
+        exception occurred:\\n\\nTraceback (most recent call last):\\n  File \\\"/compose/backend/neurosynth_compose/resources/tasks.py\\\",
+        line 187, in create_or_update_neurostore_analysis\\n    ns_analysis_get =
+        ns_ses.get(f\\\"/api/analyses/{ns_analysis.neurostore_id}\\\")\\n  File \\\"/usr/local/lib/python3.14/site-packages/requests/sessions.py\\\",
+        line 605, in get\\n    return self.request(\\\"GET\\\", url, **kwargs)\\n
+        \          ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^\\n  File \\\"/compose/backend/neurosynth_compose/resources/neurostore.py\\\",
+        line 14, in request\\n    return super(LiveServerSession, self).request(method,
+        url, *args, **kwargs)\\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n
+        \ File \\\"/usr/local/lib/python3.14/site-packages/requests/sessions.py\\\",
+        line 592, in request\\n    resp = self.send(prep, **send_kwargs)\\n  File
+        \\\"/usr/local/lib/python3.14/site-packages/requests/sessions.py\\\", line
+        706, in send\\n    r = adapter.send(request, **kwargs)\\n  File \\\"/usr/local/lib/python3.14/site-packages/requests/adapters.py\\\",
+        line 678, in send\\n    raise ConnectionError(e, request=request)\\nrequests.exceptions.ConnectionError:
+        HTTPConnectionPool(host='store_nginx', port=80): Max retries exceeded with
+        url: /api/analyses/cmc3KDLwQCf3 (Caused by NameResolutionError(\\\"HTTPConnection(host='store_nginx',
+        port=80): Failed to resolve 'store_nginx' ([Errno -3] Temporary failure in
+        name resolution)\\\"))\\n\",\"status\":\"FAILED\"},\"project\":\"DXffgHVJ8D2p\",\"run_key\":\"29B4AbnFfGanl7M-M7QtBw\",\"snapshots\":[{\"result_id\":\"KhZ4ejJQVkSj\",\"snapshot_studyset_id\":\"5XzRwFdokxRN\",\"snapshot_annotation_id\":\"UCYSGJ5nrd3o\"},{\"result_id\":\"Foqo3tWjJXds\",\"snapshot_studyset_id\":\"Ma5ECMNEDBcA\",\"snapshot_annotation_id\":\"CGWKAChGgixY\"}],\"results\":[\"KhZ4ejJQVkSj\",\"Foqo3tWjJXds\"],\"neurostore_url\":\"https://neurostore.org/api/analyses/cmc3KDLwQCf3\",\"neurostore_studyset\":{\"id\":\"ToisksSserJp\",\"created_at\":\"2026-02-18T13:37:46.502832+00:00\",\"updated_at\":null,\"studysets\":[{\"id\":\"5XzRwFdokxRN\",\"md5\":\"46e2d4e9cd2a6ac013c146c16d948e79\"},{\"id\":\"Ma5ECMNEDBcA\",\"md5\":\"7afa8021f05f2e6f972bcee6c23e044e\"}]},\"neurostore_annotation\":{\"id\":\"CeQLLXWepB3J\",\"annotations\":[{\"id\":\"UCYSGJ5nrd3o\",\"md5\":\"aceb01fc825f6fe99ede58ec2ef602c0\"},{\"id\":\"CGWKAChGgixY\",\"md5\":\"e8e296cedd3018722b47d469322dc8ee\"}]}}"
     headers:
       Connection:
       - close
       Content-Length:
-      - '1750'
+      - '7207'
       Content-Type:
       - application/json
       Date:
-      - Tue, 21 Oct 2025 14:14:50 GMT
+      - Tue, 21 Apr 2026 02:13:15 GMT
       Server:
       - nginx/1.21.6
       Strict-Transport-Security:

@@ -9,30 +9,28 @@ interactions:
       Connection:
       - keep-alive
       User-Agent:
-      - python-requests/2.31.0
+      - python-requests/2.33.0
     method: GET
-    uri: https://synth.neurostore.xyz/api/meta-analyses/made_up_id?nested=true
+    uri: https://staging.synth.neurostore.xyz/api/meta-analyses/made_up_id?nested=true
   response:
     body:
-      string: "{\n  \"detail\": \"The requested URL was not found on the server. If
-        you entered the URL manually please check your spelling and try again.\",\n
-        \ \"status\": 404,\n  \"title\": \"Not Found\",\n  \"type\": \"about:blank\"\n}\n"
+      string: '{"type": "about:blank", "title": "Not Found", "detail": "The requested
+        URL was not found on the server. If you entered the URL manually please check
+        your spelling and try again.", "status": 404}'
     headers:
-      Access-Control-Allow-Origin:
-      - '*'
       Connection:
       - keep-alive
       Content-Length:
-      - '205'
+      - '194'
       Content-Type:
       - application/problem+json
       Date:
-      - Wed, 17 Jan 2024 23:52:55 GMT
+      - Tue, 21 Apr 2026 02:13:16 GMT
       Server:
       - nginx/1.21.6
       Strict-Transport-Security:
       - max-age=31536000
     status:
       code: 404
-      message: NOT FOUND
+      message: Not Found
 version: 1
