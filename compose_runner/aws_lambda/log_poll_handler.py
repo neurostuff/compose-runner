@@ -8,7 +8,9 @@ import boto3
 
 from compose_runner.aws_lambda.common import LambdaRequest
 
-_LOGS_CLIENT = boto3.client("logs", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+_LOGS_CLIENT = boto3.client(
+    "logs", region_name=os.environ.get("AWS_REGION", "us-east-1")
+)
 
 LOG_GROUP_ENV = "RUNNER_LOG_GROUP"
 DEFAULT_LOOKBACK_MS_ENV = "DEFAULT_LOOKBACK_MS"

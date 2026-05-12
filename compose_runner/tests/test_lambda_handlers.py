@@ -6,7 +6,12 @@ from typing import Any, Dict
 
 import pytest
 
-from compose_runner.aws_lambda import log_poll_handler, results_handler, run_handler, status_handler
+from compose_runner.aws_lambda import (
+    log_poll_handler,
+    results_handler,
+    run_handler,
+    status_handler,
+)
 
 
 class DummyContext:
@@ -37,13 +42,17 @@ def test_requires_large_task_false_when_method_differs():
 
 @pytest.mark.vcr(record_mode="none")
 def test_select_task_size_uses_large_for_montecarlo():
-    task_size = run_handler._select_task_size("QEngL8uVonCU", "staging", "artifact-test")
+    task_size = run_handler._select_task_size(
+        "QEngL8uVonCU", "staging", "artifact-test"
+    )
     assert task_size == "large"
 
 
 @pytest.mark.vcr(record_mode="none")
 def test_select_task_size_uses_standard_for_fdr():
-    task_size = run_handler._select_task_size("ataCTPAt2LMw", "staging", "artifact-test")
+    task_size = run_handler._select_task_size(
+        "ataCTPAt2LMw", "staging", "artifact-test"
+    )
     assert task_size == "standard"
 
 
@@ -53,11 +62,12 @@ def test_run_handler_http_success(monkeypatch, tmp_path):
     class FakeSFN:
         def start_execution(self, **kwargs):
             captured.update(kwargs)
-            return {"executionArn": "arn:aws:states:us-east-1:123:execution:state-machine:run-123"}
+            return {
+                "executionArn": "arn:aws:states:us-east-1:123:execution:state-machine:run-123"
+            }
 
         class exceptions:
-            class ExecutionAlreadyExists(Exception):
-                ...
+            class ExecutionAlreadyExists(Exception): ...
 
     monkeypatch.setattr(run_handler, "_SFN_CLIENT", FakeSFN())
     monkeypatch.setattr(run_handler, "_select_task_size", lambda *args: "standard")
@@ -68,7 +78,11 @@ def test_run_handler_http_success(monkeypatch, tmp_path):
     monkeypatch.setenv("NV_KEY", "nv")
 
     event = _make_http_event(
-        {"meta_analysis_id": "abc123", "environment": "production", "artifact_prefix": "artifact-123"}
+        {
+            "meta_analysis_id": "abc123",
+            "environment": "production",
+            "artifact_prefix": "artifact-123",
+        }
     )
     context = DummyContext("unused")
 
@@ -97,11 +111,12 @@ def test_run_handler_http_uses_large_task(monkeypatch):
     class FakeSFN:
         def start_execution(self, **kwargs):
             captured.update(kwargs)
-            return {"executionArn": "arn:aws:states:us-east-1:123:execution:state-machine:run-456"}
+            return {
+                "executionArn": "arn:aws:states:us-east-1:123:execution:state-machine:run-456"
+            }
 
         class exceptions:
-            class ExecutionAlreadyExists(Exception):
-                ...
+            class ExecutionAlreadyExists(Exception): ...
 
     monkeypatch.setattr(run_handler, "_SFN_CLIENT", FakeSFN())
     monkeypatch.setattr(run_handler, "_select_task_size", lambda *args: "large")
@@ -127,7 +142,9 @@ def test_run_handler_missing_meta_analysis(monkeypatch):
 
 
 def test_log_poll_handler(monkeypatch):
-    events_payload = [{"timestamp": 1, "message": '{"job_id":"id","message":"workflow.start"}'}]
+    events_payload = [
+        {"timestamp": 1, "message": '{"job_id":"id","message":"workflow.start"}'}
+    ]
 
     class FakeLogs:
         def filter_log_events(self, **kwargs):
@@ -156,7 +173,11 @@ def test_log_poll_handler_http_missing_job_id(monkeypatch):
 
 def test_results_handler(monkeypatch):
     objects = [
-        {"Key": "prefix/id/file1.nii.gz", "Size": 10, "LastModified": results_handler.datetime.now()}
+        {
+            "Key": "prefix/id/file1.nii.gz",
+            "Size": 10,
+            "LastModified": results_handler.datetime.now(),
+        }
     ]
 
     class FakeS3:
@@ -211,7 +232,10 @@ def test_status_handler_succeeded(monkeypatch):
         def get_object(self, Bucket, Key):
             assert Bucket == "bucket"
             assert Key == "prefix/artifact-1/metadata.json"
-            metadata = {"artifact_prefix": "artifact-1", "result_url": "https://results"}
+            metadata = {
+                "artifact_prefix": "artifact-1",
+                "result_url": "https://results",
+            }
             return {"Body": FakeBody(json.dumps(metadata).encode("utf-8"))}
 
     monkeypatch.setattr(status_handler, "_SFN", FakeSFN())

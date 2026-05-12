@@ -7,7 +7,9 @@ from compose_runner.cli import cli
 def test_cli(monkeypatch):
     calls = {}
 
-    def fake_run(meta_analysis_id, environment, result_dir, nsc_key, nv_key, no_upload, n_cores):
+    def fake_run(
+        meta_analysis_id, environment, result_dir, nsc_key, nv_key, no_upload, n_cores
+    ):
         calls["args"] = {
             "meta_analysis_id": meta_analysis_id,
             "environment": environment,

@@ -1,10 +1,15 @@
+import os
 import pytest
 
 
 @pytest.fixture(scope="session")
 def vcr_config():
-    """Replay cassettes without live network dependency during routine test runs."""
+    """Control VCR record mode via VCR_RECORD_MODE env var (default: none).
+
+    To re-record cassettes:
+        VCR_RECORD_MODE=new_episodes pytest compose_runner/tests/
+    """
     return {
         "decode_compressed_response": True,
-        "record_mode": "none",
+        "record_mode": os.environ.get("VCR_RECORD_MODE", "none"),
     }
