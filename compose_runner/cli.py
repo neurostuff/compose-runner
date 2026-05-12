@@ -22,5 +22,7 @@ def cli(meta_analysis_id, environment, result_dir, nsc_key, nv_key, no_upload, n
 
     META_ANALYSIS_ID is the id of the meta-analysis on neurosynth-compose.
     """
-    url, _ = run(meta_analysis_id, environment, result_dir, nsc_key, nv_key, no_upload, n_cores)
+    url, _ = run(
+        meta_analysis_id, environment, result_dir, nsc_key, nv_key, no_upload, n_cores
+    )
     print(url)

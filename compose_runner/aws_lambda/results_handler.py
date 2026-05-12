@@ -35,7 +35,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         raise KeyError(message)
     expires_in = int(payload.get("expires_in", DEFAULT_EXPIRES_IN))
 
-    key_prefix = f"{prefix.rstrip('/')}/{artifact_prefix}" if prefix else artifact_prefix
+    key_prefix = (
+        f"{prefix.rstrip('/')}/{artifact_prefix}" if prefix else artifact_prefix
+    )
 
     response = _S3.list_objects_v2(Bucket=bucket, Prefix=key_prefix)
     contents = response.get("Contents", [])

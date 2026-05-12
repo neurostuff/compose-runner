@@ -48,15 +48,23 @@ def _iter_result_files(result_dir: Path) -> Iterable[Path]:
             yield path
 
 
-def _upload_results(artifact_prefix: str, result_dir: Path, bucket: str, prefix: Optional[str]) -> None:
-    base_prefix = f"{prefix.rstrip('/')}/{artifact_prefix}" if prefix else artifact_prefix
+def _upload_results(
+    artifact_prefix: str, result_dir: Path, bucket: str, prefix: Optional[str]
+) -> None:
+    base_prefix = (
+        f"{prefix.rstrip('/')}/{artifact_prefix}" if prefix else artifact_prefix
+    )
     for file_path in _iter_result_files(result_dir):
         key = f"{base_prefix}/{file_path.name}"
         _S3_CLIENT.upload_file(str(file_path), bucket, key)
 
 
-def _write_metadata(bucket: str, prefix: Optional[str], artifact_prefix: str, metadata: Dict[str, Any]) -> None:
-    base_prefix = f"{prefix.rstrip('/')}/{artifact_prefix}" if prefix else artifact_prefix
+def _write_metadata(
+    bucket: str, prefix: Optional[str], artifact_prefix: str, metadata: Dict[str, Any]
+) -> None:
+    base_prefix = (
+        f"{prefix.rstrip('/')}/{artifact_prefix}" if prefix else artifact_prefix
+    )
     key = f"{base_prefix}/{METADATA_FILENAME}"
     metadata["metadata_key"] = key
     _S3_CLIENT.put_object(

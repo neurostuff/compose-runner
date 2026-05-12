@@ -32,7 +32,11 @@ def _current_month_cost() -> Dict[str, Any]:
         Metrics=["UnblendedCost"],
     )
     results = response.get("ResultsByTime", [])
-    total = results[0]["Total"]["UnblendedCost"] if results else {"Amount": "0", "Unit": "USD"}
+    total = (
+        results[0]["Total"]["UnblendedCost"]
+        if results
+        else {"Amount": "0", "Unit": "USD"}
+    )
     amount = float(Decimal(total.get("Amount", "0")))
     currency = total.get("Unit", "USD")
     return {"amount": amount, "currency": currency, "time_period": period}

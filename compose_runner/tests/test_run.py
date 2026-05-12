@@ -1,25 +1,25 @@
 import pytest
-from requests.exceptions import HTTPError
+from neurosynth_compose_sdk.exceptions import ApiException as ComposeApiException
 
 from compose_runner.run import Runner
 
 
-@pytest.mark.vcr(record_mode="none")
+@pytest.mark.vcr
 def test_incorrect_id():
     runner = Runner(
         meta_analysis_id="made_up_id",
-        environment="staging",
+        environment="production",
     )
 
-    with pytest.raises(HTTPError):
+    with pytest.raises(ComposeApiException):
         runner.run_workflow()
 
 
-@pytest.mark.vcr(record_mode="none")
+@pytest.mark.vcr
 def test_download_bundle():
     runner = Runner(
         meta_analysis_id="ataCTPAt2LMw",
-        environment="staging",
+        environment="production",
     )
     runner.download_bundle()
     assert runner.cached_studyset is not None
@@ -27,40 +27,41 @@ def test_download_bundle():
     assert runner.cached_specification is not None
 
 
-@pytest.mark.vcr(record_mode="none")
+@pytest.mark.vcr
 def test_run_workflow():
     runner = Runner(
         meta_analysis_id="ataCTPAt2LMw",
-        environment="staging",
+        environment="production",
     )
-    runner.run_workflow(n_cores=2)
+    runner.run_workflow(n_cores=2, no_upload=True)
 
 
-@pytest.mark.vcr(record_mode="none")
+@pytest.mark.vcr
 def test_run_database_workflow():
     runner = Runner(
         meta_analysis_id="SZDBPeTwArZY",
-        environment="staging",
+        environment="production",
     )
-    runner.run_workflow()
+    runner.run_workflow(no_upload=True)
 
 
-@pytest.mark.vcr(record_mode="none")
+@pytest.mark.vcr
 def test_run_group_comparison_workflow():
     runner = Runner(
         meta_analysis_id="7NUkZJ28QDpY",
-        environment="staging",
+        environment="production",
     )
-    runner.run_workflow()
+    runner.run_workflow(no_upload=True)
 
 
-@pytest.mark.vcr(record_mode="none")
+@pytest.mark.vcr
 def test_run_string_group_comparison_workflow():
     runner = Runner(
         meta_analysis_id="7NUkZJ28QDpY",
-        environment="staging",
+        environment="production",
     )
-    runner.run_workflow()
+    runner.run_workflow(no_upload=True)
+
 
 # def test_yifan_workflow():
 #     runner = Runner(

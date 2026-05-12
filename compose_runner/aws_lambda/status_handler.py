@@ -10,7 +10,9 @@ from botocore.exceptions import ClientError
 
 from compose_runner.aws_lambda.common import LambdaRequest
 
-_SFN = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+_SFN = boto3.client(
+    "stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1")
+)
 _S3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
@@ -28,7 +30,9 @@ def _metadata_key(prefix: Optional[str], artifact_prefix: str) -> str:
     return f"{artifact_prefix}/{METADATA_FILENAME}"
 
 
-def _load_metadata(bucket: str, prefix: Optional[str], artifact_prefix: str) -> Optional[Dict[str, Any]]:
+def _load_metadata(
+    bucket: str, prefix: Optional[str], artifact_prefix: str
+) -> Optional[Dict[str, Any]]:
     key = _metadata_key(prefix, artifact_prefix)
     try:
         response = _S3.get_object(Bucket=bucket, Key=key)
@@ -65,7 +69,11 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     except ClientError as error:
         body = {"status": "FAILED", "error": error.response["Error"]["Message"]}
         if request.is_http:
-            status_code = 404 if error.response["Error"]["Code"] == "ExecutionDoesNotExist" else 500
+            status_code = (
+                404
+                if error.response["Error"]["Code"] == "ExecutionDoesNotExist"
+                else 500
+            )
             return request.respond(body, status_code=status_code)
         raise
 
@@ -83,7 +91,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     artifact_prefix = description.get("name")
     if not artifact_prefix:
-        raise ValueError("Execution does not expose a name; cannot determine artifact prefix.")
+        raise ValueError(
+            "Execution does not expose a name; cannot determine artifact prefix."
+        )
     body["artifact_prefix"] = artifact_prefix
 
     if status in {"SUCCEEDED", "FAILED"}:

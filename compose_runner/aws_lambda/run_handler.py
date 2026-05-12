@@ -16,7 +16,9 @@ from compose_runner.aws_lambda.common import LambdaRequest
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-_SFN_CLIENT = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+_SFN_CLIENT = boto3.client(
+    "stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1")
+)
 
 STATE_MACHINE_ARN_ENV = "STATE_MACHINE_ARN"
 RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
@@ -44,10 +46,14 @@ def _compose_api_base_url(environment: str) -> str:
     return "https://compose.neurosynth.org/api"
 
 
-def _fetch_meta_analysis(meta_analysis_id: str, environment: str) -> Optional[Dict[str, Any]]:
+def _fetch_meta_analysis(
+    meta_analysis_id: str, environment: str
+) -> Optional[Dict[str, Any]]:
     base_url = _compose_api_base_url(environment).rstrip("/")
     url = f"{base_url}/meta-analyses/{meta_analysis_id}?nested=true"
-    request = urllib.request.Request(url, headers={"User-Agent": "compose-runner/submit"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "compose-runner/submit"}
+    )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.load(response)
@@ -77,7 +83,9 @@ def _requires_large_task(specification: Dict[str, Any]) -> bool:
     return False
 
 
-def _select_task_size(meta_analysis_id: str, environment: str, artifact_prefix: str) -> str:
+def _select_task_size(
+    meta_analysis_id: str, environment: str, artifact_prefix: str
+) -> str:
     doc = _fetch_meta_analysis(meta_analysis_id, environment)
     if not doc:
         return DEFAULT_TASK_SIZE
@@ -92,7 +100,9 @@ def _select_task_size(meta_analysis_id: str, environment: str, artifact_prefix: 
             )
             return "large"
     except Exception as exc:  # noqa: broad-except
-        logger.warning("Failed to evaluate specification for %s: %s", meta_analysis_id, exc)
+        logger.warning(
+            "Failed to evaluate specification for %s: %s", meta_analysis_id, exc
+        )
     return DEFAULT_TASK_SIZE
 
 
@@ -146,9 +156,13 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     nv_key = payload.get("nv_key") or os.environ.get(NV_KEY_ENV)
 
     environment = payload.get("environment", "production")
-    task_size = _select_task_size(payload["meta_analysis_id"], environment, artifact_prefix)
+    task_size = _select_task_size(
+        payload["meta_analysis_id"], environment, artifact_prefix
+    )
 
-    job_input = _job_input(payload, artifact_prefix, bucket, prefix, nsc_key, nv_key, task_size)
+    job_input = _job_input(
+        payload, artifact_prefix, bucket, prefix, nsc_key, nv_key, task_size
+    )
     params = {
         "stateMachineArn": os.environ[STATE_MACHINE_ARN_ENV],
         "name": artifact_prefix,

@@ -53,8 +53,9 @@ class LambdaRequest:
         return body
 
     def bad_request(self, message: str, status_code: int = 400) -> Dict[str, Any]:
-        return self.respond({"status": "FAILED", "error": message}, status_code=status_code)
+        return self.respond(
+            {"status": "FAILED", "error": message}, status_code=status_code
+        )
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.payload.get(key, default)
-
