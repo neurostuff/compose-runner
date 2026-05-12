@@ -14,7 +14,14 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dynamic = ["version"]
-dependencies = ["nimare>=0.17.0", "click", "sentry-sdk", "numpy"]
+dependencies = [
+    "nimare>=0.17.0",
+    "click",
+    "sentry-sdk",
+    "numpy",
+    "neurostore-sdk>=1.1",
+    "neurosynth-compose-sdk>=1.2",
+]
 
 [project.urls]
 Repository = "https://github.com/neurostuff/compose-runner"
