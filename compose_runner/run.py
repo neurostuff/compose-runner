@@ -4,8 +4,10 @@ import hashlib
 import json
 import io
 import pickle
+from datetime import date, datetime
 from importlib import import_module
 from pathlib import Path
+from uuid import UUID
 
 import requests
 import neurosynth_compose_sdk
@@ -227,7 +229,7 @@ class Runner:
                 # Old API format: list of {id, md5} snapshot summaries
                 ref_document = document.get(ref_key)
                 if isinstance(ref_document, dict):
-                    for summary_document in (ref_document.get(summary_key) or []):
+                    for summary_document in ref_document.get(summary_key) or []:
                         snapshot_id = self._extract_document_id(summary_document)
                         if snapshot_id is not None:
                             break
@@ -239,9 +241,11 @@ class Runner:
                             id=snapshot_id
                         ).to_dict()
                     else:
-                        snapshot_document = self.compose_api.snapshot_annotations_id_get(
-                            id=snapshot_id
-                        ).to_dict()
+                        snapshot_document = (
+                            self.compose_api.snapshot_annotations_id_get(
+                                id=snapshot_id
+                            ).to_dict()
+                        )
                 except ComposeApiException:
                     continue
                 payload = self._unwrap_snapshot(snapshot_document)
@@ -357,12 +361,36 @@ class Runner:
         self.existing_annotation_snapshot_id = records["annotation"]["snapshot_id"]
 
     @staticmethod
-    def _snapshot_md5(payload):
-        serialized_payload = json.dumps(
+    def _json_payload_default(value):
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        if isinstance(value, UUID):
+            return str(value)
+        if isinstance(value, set):
+            return sorted(value, key=str)
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict):
+            return to_dict()
+        raise TypeError(
+            f"Object of type {value.__class__.__name__} is not JSON serializable"
+        )
+
+    @classmethod
+    def _snapshot_json(cls, payload):
+        return json.dumps(
             payload,
+            default=cls._json_payload_default,
             sort_keys=True,
             separators=(",", ":"),
         )
+
+    @classmethod
+    def _json_safe_payload(cls, payload):
+        return json.loads(cls._snapshot_json(payload))
+
+    @classmethod
+    def _snapshot_md5(cls, payload):
+        serialized_payload = cls._snapshot_json(payload)
         return hashlib.md5(serialized_payload.encode("utf-8")).hexdigest()
 
     def _should_link_existing_snapshot(
@@ -587,7 +615,9 @@ class Runner:
             ):
                 kwargs[f"snapshot_{entity_name}_id"] = existing_id
             else:
-                kwargs[f"snapshot_{entity_name}"] = live_payload
+                kwargs[f"snapshot_{entity_name}"] = self._json_safe_payload(
+                    live_payload
+                )
 
         self._compose_config.api_key["upload_key"] = self.nsc_key
         result = self.compose_api.meta_analysis_results_post(
