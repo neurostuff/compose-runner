@@ -86,13 +86,6 @@ def _requires_large_task(specification: Dict[str, Any]) -> bool:
         return False
 
     if str(specification.get("type") or "").strip().lower() == "ibma":
-        # Only the FWE path is heavy, and for an image-based run that means
-        # PermutedOLS's permutation test -- it is the only image-based estimator
-        # with FWE_enabled. Everything else measured comfortably inside the
-        # standard task: the "language" studyset (27 studies, 39 images, 263
-        # voxel bags, aggressive_mask=False) peaked at 3.06 GiB against a 30 GiB
-        # limit and finished in 227s on four vCPU. The inputs that sound
-        # expensive are not -- the masked array every map is held in is 36 MB.
         return _is_fwe(specification)
 
     # Coordinate-based runs escalate only for the montecarlo null, which is
@@ -108,10 +101,6 @@ def _select_task_size(
 ) -> str:
     doc = _fetch_meta_analysis(meta_analysis_id, environment)
     if not doc:
-        # Sizing is a guess from here on. Logged rather than passed over, because
-        # an image-based run on the standard task looks like an unexplained
-        # slowdown or OOM afterwards, with nothing recording that the
-        # specification was never read.
         _log(
             artifact_prefix,
             "workflow.task_size_selected",
@@ -136,16 +125,6 @@ def _select_task_size(
             "Failed to evaluate specification for %s: %s", meta_analysis_id, exc
         )
 
-    if not isinstance(specification, dict):
-        # ?nested=true is what makes this a dict rather than an id string, so
-        # this means the response shape changed under us and every IBMA would
-        # quietly be sized as though it were coordinate-based.
-        _log(
-            artifact_prefix,
-            "workflow.task_size_selected",
-            task_size=DEFAULT_TASK_SIZE,
-            reason="specification_not_nested",
-        )
     return DEFAULT_TASK_SIZE
 
 
