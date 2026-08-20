@@ -1,5 +1,6 @@
 import compose_runner.sentry
 import gzip
+import logging
 import hashlib
 import json
 import io
@@ -19,10 +20,18 @@ from neurostore_sdk.exceptions import ApiException as StoreApiException
 from neurosynth_compose_sdk.models import ResultInit
 
 from nimare.correct import FDRCorrector
-from nimare.workflows import CBMAWorkflow, PairwiseCBMAWorkflow
+from nimare.workflows import CBMAWorkflow, IBMAWorkflow, PairwiseCBMAWorkflow
 from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
+from nimare.meta.ibma import IBMAEstimator
 from nimare.nimads import Studyset, Annotation
 from nimare.meta.cbma import ALE, ALESubtraction, SCALE
+
+from compose_runner import coverage
+from compose_runner.estimator_args import resolve_ibma_estimator_args
+from compose_runner.images import download_studyset_images
+from compose_runner.metadata import apply_sample_sizes
+
+LGR = logging.getLogger(__name__)
 
 
 def gen_database_url(branch, database):
@@ -110,6 +119,10 @@ class Runner:
         self.second_studyset = None
         self.estimator = None
         self.corrector = None
+        self.n_cores = None
+        # Which maps never made it into an image-based meta-analysis, and why.
+        self.dropped_maps = {}
+        self.coverage_report = None
 
         # initialize api-keys
         self.nsc_key = nsc_key  # neurosynth compose key to upload to neurosynth compose
@@ -120,6 +133,11 @@ class Runner:
             self.result_dir = Path.cwd() / "results"
         else:
             self.result_dir = Path(result_dir)
+
+        # Where image-based meta-analyses stage their downloaded maps. Kept
+        # alongside the results so it doubles as a cache across reruns, and so
+        # NiMARE has somewhere writable to put any maps it derives.
+        self.image_dir = self.result_dir / "images"
 
         # whether the inputs were cached from neurostore
         self.cached = True
@@ -469,7 +487,7 @@ class Runner:
         # run key for running this particular meta-analysis
         self.nsc_key = meta_analysis.get("run_key")
 
-    def apply_filter(self, studyset, annotation):
+    def apply_filter(self, studyset, annotation, combine=True):
         """
         Apply filter to studyset.
             Options:
@@ -479,6 +497,14 @@ class Runner:
                   can be single or multiple conditions
                 - database_studyset: use a reference studyset
                   only useful for multiple conditions
+
+        Set ``combine=False`` to keep each analysis separate. Merging is right
+        for CBMA, where the point is to pool a study's coordinates, but wrong
+        for IBMA: it concatenates a study's images into one analysis, and the
+        conversion to a Dataset keeps only one map per type, so every extra
+        contrast is silently discarded. Keeping them apart also preserves the
+        study grouping that NiMARE uses to correct for dependence between a
+        study's contrasts.
         """
         column = self.cached_specification["filter"]
         column_type = self.cached_annotation["note_keys"][f"{column}"]
@@ -512,7 +538,8 @@ class Runner:
             raise ValueError(f"Column type {column_type} not supported.")
 
         first_studyset = studyset.slice(analyses=analysis_ids)
-        first_studyset = first_studyset.combine_analyses()
+        if combine:
+            first_studyset = first_studyset.combine_analyses()
 
         # if there is only one condition, return the first studyset
         if len(conditions) <= 1 and not database_studyset:
@@ -535,7 +562,8 @@ class Runner:
                     if n.note.get(f"{column}") == weight_conditions[-1]
                 ]
             second_studyset = studyset.slice(analyses=second_analysis_ids)
-            second_studyset = second_studyset.combine_analyses()
+            if combine:
+                second_studyset = second_studyset.combine_analyses()
 
             return first_studyset, second_studyset
 
@@ -577,19 +605,179 @@ class Runner:
             )
             del reference_studyset_dict
 
-            second_studyset = reference_studyset.combine_analyses()
+            second_studyset = (
+                reference_studyset.combine_analyses() if combine else reference_studyset
+            )
 
             return first_studyset, second_studyset
 
+    def _is_image_based(self):
+        """Whether the specification asks for an image-based meta-analysis."""
+        spec_type = str((self.cached_specification or {}).get("type") or "").strip()
+        return spec_type.lower() == "ibma"
+
+    def prepare_images(self):
+        """Download the studyset's maps locally and fill in sample sizes.
+
+        NiMARE hands image paths to nibabel, which cannot read over HTTP, so
+        the maps have to be on disk before the studyset becomes a Dataset. The
+        same directory doubles as the writable base path that NiMARE's
+        ImageTransformer needs when it derives missing maps.
+        """
+        self.image_dir.mkdir(parents=True, exist_ok=True)
+        self.cached_studyset, self.dropped_maps = download_studyset_images(
+            self.cached_studyset, self.image_dir
+        )
+        self.cached_studyset = apply_sample_sizes(
+            self.cached_studyset, self.cached_annotation
+        )
+
     def process_bundle(self, n_cores=None):
+        # Kept so run_meta_analysis can pass it to the workflow, which is what
+        # parallelizes the diagnostics.
+        self.n_cores = n_cores
+        image_based = self._is_image_based()
+
+        # Built before the images are fetched, not after. NiMARE raises on an
+        # argument it does not recognize, and so does load_specification, so a
+        # stale specification should cost nothing -- doing this later would mean
+        # downloading every map in the studyset first and failing anyway.
+        estimator, corrector = self.load_specification(n_cores=n_cores)
+
+        if image_based:
+            self.prepare_images()
+
         studyset = Studyset(self.cached_studyset, target=self._TARGET_SPACE)
         annotation = Annotation(self.cached_annotation, studyset)
-        first_studyset, second_studyset = self.apply_filter(studyset, annotation)
-        estimator, corrector = self.load_specification(n_cores=n_cores)
+        first_studyset, second_studyset = self.apply_filter(
+            studyset, annotation, combine=not image_based
+        )
+
+        if image_based:
+            # ImageTransformer writes any maps it derives (varcope from beta
+            # and t, say) into the studyset's base path.
+            first_studyset = first_studyset.update_path(str(self.image_dir))
+
         self.first_studyset = first_studyset
         self.second_studyset = second_studyset
         self.estimator = estimator
         self.corrector = corrector
+
+    def _empty_input_maps(self):
+        """Which input maps carry no usable value at all.
+
+        NiMARE counts a voxel as valid only where it is finite *and* non-zero, so
+        an empty or wholly thresholded upload has no valid voxel anywhere. Under
+        ``aggressive_mask=True`` the mask is the intersection across inputs, so a
+        single map like that annihilates it however good the rest are.
+        """
+        import numpy as np
+
+        inputs = getattr(self.estimator, "inputs_", None) or {}
+        image_names = [
+            name
+            for name, (kind, _) in (self.estimator._required_inputs or {}).items()
+            if kind == "image" and name in inputs
+        ]
+        if not image_names:
+            return []
+
+        ids = [str(image_id) for image_id in inputs.get("id", [])]
+        values = np.asarray(inputs[image_names[0]], dtype=float)
+        valid = np.isfinite(values) & (values != 0)
+        return [
+            ids[i] if i < len(ids) else f"image {i}"
+            for i in range(valid.shape[0])
+            if not valid[i].any()
+        ]
+
+    def _check_result_is_not_empty(self):
+        """Refuse a result that has no value anywhere.
+
+        An image-based meta-analysis can finish, write every map, and have
+        computed nothing. The run looks successful and the statistical maps are
+        entirely NaN, which is worse than failing, because that is what gets
+        uploaded.
+        """
+        import numpy as np
+
+        maps = (self.meta_results.maps or {}) if self.meta_results else {}
+        finite = {
+            name: int(np.isfinite(np.asarray(values, dtype=float)).sum())
+            for name, values in maps.items()
+            if values is not None and not name.startswith("label_")
+        }
+        if not finite or any(finite.values()):
+            return
+
+        message = [
+            "The meta-analysis produced no value at any voxel: every map is "
+            "entirely NaN."
+        ]
+        empty = self._empty_input_maps()
+        if empty:
+            message.append(
+                f"{len(empty)} input map(s) have no finite non-zero voxel at all, "
+                f"and under aggressive_mask=True one such map empties the mask on "
+                f"its own: {', '.join(empty[:5])}"
+                + (f", and {len(empty) - 5} more" if len(empty) > 5 else "")
+                + ". Those maps are empty uploads and contribute nothing; exclude "
+                "them, or set aggressive_mask=False."
+            )
+        else:
+            message.append(
+                "With aggressive_mask=True a voxel must be valid in all "
+                f"{len(self.estimator.inputs_['id'])} input maps, and these do not "
+                "overlap that completely. Set aggressive_mask=False, which "
+                "analyses each group of voxels sharing a validity pattern and is "
+                "NiMARE's default."
+            )
+        raise ValueError(" ".join(message))
+
+    def _describe_coverage(self, report):
+        """Log and persist the account of what the meta-analysis used."""
+        self.coverage_report = report
+        LGR.info(
+            "Image coverage for %s:\n%s",
+            type(self.estimator).__name__,
+            report.summary(),
+        )
+        self.result_dir.mkdir(parents=True, exist_ok=True)
+        (self.result_dir / "ibma_coverage.tsv").write_text(report.to_tsv())
+
+        # Partial coverage is the normal case, not an error -- it is the reason
+        # the report exists. Say it loudly enough to be noticed.
+        if report.excluded:
+            LGR.warning(
+                "%d of %d analyses are not in this meta-analysis. See %s.",
+                len(report.excluded),
+                len(report.analyses),
+                self.result_dir / "ibma_coverage.tsv",
+            )
+
+    def _fit_image_based(self, workflow):
+        """Fit the workflow, then say what it used and what it discarded.
+
+        The workflow converts what it can and drops the rest on its own; this
+        only reads the outcome off the fitted estimator afterwards. When nothing
+        survives there is no fitted estimator to read, so the submitted studyset
+        is described instead and NiMARE's own message is kept.
+        """
+        try:
+            self.meta_results = workflow.fit(self.first_studyset)
+        except ValueError as exc:
+            report = coverage.describe_submission(
+                self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
+            )
+            self._describe_coverage(report)
+            raise ValueError(f"{exc}\n\n{report.summary()}") from exc
+
+        self._describe_coverage(
+            coverage.describe_result(
+                self.meta_results, self.first_studyset, dropped_maps=self.dropped_maps
+            )
+        )
+        self._check_result_is_not_empty()
 
     def create_result_object(self):
         entity_payloads = {
@@ -647,6 +835,31 @@ class Runner:
                 output_dir=self.result_dir,
             )
             self.meta_results = workflow.fit(self.first_studyset)
+        elif isinstance(self.estimator, IBMAEstimator):
+            if self.second_studyset is not None:
+                raise ValueError(
+                    "A group comparison was requested, but no image-based estimator "
+                    f"supports one. {type(self.estimator).__name__} takes a single "
+                    "studyset. Choose a single-group selection, or a pairwise "
+                    "coordinate-based estimator."
+                )
+            # FocusCounter counts foci, so it is meaningless here; Jackknife is
+            # the only diagnostic IBMAWorkflow accepts. Named rather than
+            # constructed, exactly as the coordinate-based branches name
+            # "focuscounter", so the workflow's voxel_thresh and
+            # cluster_threshold are what define clusters.
+            # Left out entirely when unset, because the workflow's own default
+            # is 1 and it passes whatever it is given to _check_ncores, which
+            # cannot handle None.
+            workflow_kwargs = {} if self.n_cores is None else {"n_cores": self.n_cores}
+            workflow = IBMAWorkflow(
+                estimator=self.estimator,
+                corrector=self.corrector,
+                diagnostics="jackknife",
+                output_dir=self.result_dir,
+                **workflow_kwargs,
+            )
+            self._fit_image_based(workflow)
         else:
             raise ValueError(
                 "Estimator "
@@ -656,10 +869,13 @@ class Runner:
         self._persist_meta_results()
 
     def upload_results(self):
+        # Mirror save_maps, which skips a map whose value is None and so never
+        # writes a file for it. Reading unconditionally would fail here, at the
+        # very end of a run, having already done all the work.
         stat_maps = [
             (m + ".nii.gz", (self.result_dir / (m + ".nii.gz")).read_bytes())
-            for m in self.meta_results.maps.keys()
-            if not m.startswith("label_")
+            for m, values in self.meta_results.maps.items()
+            if not m.startswith("label_") and values is not None
         ]
         cluster_tables = [
             (f + ".tsv", (self.result_dir / (f + ".tsv")).read_bytes())
@@ -709,14 +925,21 @@ class Runner:
         est_args = (
             {**spec["estimator"]["args"]} if spec["estimator"].get("args") else {}
         )
-        if n_cores is not None:
-            est_args["n_cores"] = n_cores
-        if est_args.get("n_iters") is not None:
-            est_args["n_iters"] = int(est_args["n_iters"])
-        if est_args.get("**kwargs") is not None:
-            for k, v in est_args["**kwargs"].items():
-                est_args[k] = v
-            del est_args["**kwargs"]
+        if self._is_image_based():
+            # Image-based estimators take **kwargs, so NiMARE accepts an
+            # argument it does not know and only logs that it ignored it. That
+            # turns a stale specification into a wrong result rather than an
+            # error, so resolve the names and reject the leftovers.
+            est_args = resolve_ibma_estimator_args(estimator, est_args, n_cores=n_cores)
+        else:
+            if n_cores is not None:
+                est_args["n_cores"] = n_cores
+            if est_args.get("n_iters") is not None:
+                est_args["n_iters"] = int(est_args["n_iters"])
+            if est_args.get("**kwargs") is not None:
+                for k, v in est_args["**kwargs"].items():
+                    est_args[k] = v
+                del est_args["**kwargs"]
         estimator_init = estimator(**est_args)
 
         if spec.get("corrector"):
