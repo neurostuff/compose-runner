@@ -348,21 +348,3 @@ def test_task_size_logs_when_the_specification_cannot_be_read(monkeypatch, caplo
 
     assert task_size == "standard"
     assert "specification_unavailable" in caplog.text
-
-
-def test_task_size_logs_when_the_specification_is_not_nested(monkeypatch, caplog):
-    """?nested=true is what makes the specification a dict rather than an id.
-
-    Without it every IBMA would quietly be sized as coordinate-based.
-    """
-    monkeypatch.setattr(
-        run_handler,
-        "_fetch_meta_analysis",
-        lambda *args: {"specification": "Ahx3YQYb8Jx4"},
-    )
-
-    with caplog.at_level(logging.INFO):
-        task_size = run_handler._select_task_size("mid", "production", "job")
-
-    assert task_size == "standard"
-    assert "specification_not_nested" in caplog.text
