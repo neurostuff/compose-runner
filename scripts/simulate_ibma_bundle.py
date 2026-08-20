@@ -1,16 +1,10 @@
 """Assemble and run an image-based meta-analysis bundle end to end.
 
-Compose cannot create an IBMA yet, so there is no bundle to download and no way
-to find out what breaks by running one. This builds the bundle the frontend
-*would* produce -- real Neurostore studies, real NeuroVault maps, and an
-estimator specification whose arguments and defaults are read out of the
-frontend's own ``meta_analysis_params.json`` -- and pushes it through
-:class:`~compose_runner.run.Runner`.
-
-The point is that the specification is not hand-written. Taking the argument
-names and defaults from the committed config is what surfaces the places where
-the config, NiMARE and this runner disagree; a hand-written specification would
-just encode what already works.
+Compose cannot create an IBMA yet, so there is no bundle to download. This builds
+the one the frontend *would* produce -- real Neurostore studies, real NeuroVault
+maps, and a specification whose arguments and defaults are read out of the
+frontend's own ``meta_analysis_params.json`` rather than hand-written, which is
+what surfaces where the config, NiMARE and this runner disagree.
 
 Usage::
 
@@ -98,10 +92,8 @@ def required_image_types(estimator_entry, estimator_name):
 def build_specification(config, estimator_name, corrector_name=None):
     """Build the specification the frontend would POST for this estimator.
 
-    Every argument the config lists is sent with its configured default, which
-    is what the frontend does. That is deliberate: an argument the config still
-    advertises but NiMARE has dropped should show up here as a failure, not be
-    quietly omitted.
+    Every argument the config lists is sent with its configured default, as the
+    frontend does, so one NiMARE has dropped shows up here as a failure.
     """
     ibma_config = config.get("IBMA") or {}
     if estimator_name not in ibma_config:
@@ -295,12 +287,9 @@ def build_studyset(studies, max_analyses_per_study=2):
                     {
                         "id": analysis["id"],
                         "name": analysis.get("name"),
-                        # Left empty because this builds from /studies/, whose
-                        # nested response gives condition *ids* as bare strings.
-                        # The /studysets/ endpoint compose actually reads returns
-                        # them as objects with a name, which nimads.Analysis
-                        # handles; ids would not survive it. Real snapshots
-                        # frequently carry no conditions anyway.
+                        # Left empty: /studies/ gives condition *ids* as bare
+                        # strings, which nimads.Analysis cannot read, unlike the
+                        # objects /studysets/ returns.
                         "conditions": [],
                         "weights": [],
                         "images": analysis.get("images") or [],

@@ -1,22 +1,8 @@
-"""Fetch and normalize the statistical maps an IBMA needs.
+"""Fetch the statistical maps an image-based meta-analysis needs.
 
-NiMARE resolves an image to a path and hands it to nibabel, which cannot read
-over HTTP. Neurostore stores remote locations, so the maps have to be pulled
-down and the studyset rewritten to point at local files before a Dataset is
-built.
-
-Two details make this less mechanical than it sounds:
-
-* Neurostore stores an image's location across ``url`` and ``filename``, and
-  which of the two holds the downloadable NIfTI depends on how the image got
-  there. Images ingested from NeuroVault put the NIfTI in ``url`` and a bare
-  basename in ``filename``; images uploaded by compose put the NeuroVault
-  *landing page* in ``url`` and the NIfTI in ``filename``. NiMARE just takes
-  ``url or filename``, which fetches HTML for the second shape, so the NIfTI
-  has to be picked out explicitly.
-* ``value_type`` arrives as a human-readable label. NiMARE only recognizes a
-  handful of them, and silently ignores the rest -- including
-  "multivariate-beta map", which Neurostore does count as a beta map.
+NiMARE hands image paths to nibabel, which cannot read over HTTP, so
+Neurostore's remote maps have to be pulled down and the studyset rewritten to
+point at local files before a Dataset is built.
 """
 
 import hashlib
@@ -31,9 +17,8 @@ import requests
 
 LGR = logging.getLogger(__name__)
 
-# Map Neurostore's map-type labels onto the image types NiMARE understands.
-# Keys are lowercased labels; see MAP_TYPE_CHOICES in
-# store/backend/neurostore/map_types.py for the source of the labels.
+# Neurostore's map-type labels, lowercased, mapped onto NiMARE image types.
+# The labels come from MAP_TYPE_CHOICES in neurostore/map_types.py.
 MAP_TYPE_TO_IMAGE_TYPE = {
     "t map": "t",
     "t": "t",
@@ -51,9 +36,8 @@ MAP_TYPE_TO_IMAGE_TYPE = {
     "p": "p",
 }
 
-# When one analysis carries several maps of the same NiMARE type, prefer the
-# more specific one rather than letting dict ordering decide. Univariate beta
-# is a cleaner contrast estimate than multivariate beta.
+# When one analysis carries several maps of the same NiMARE type, which to
+# prefer. Univariate beta is a cleaner contrast estimate than multivariate.
 IMAGE_TYPE_PREFERENCE = {
     "beta": ["univariate-beta map", "u", "multivariate-beta map", "m"],
 }
@@ -84,9 +68,7 @@ def _is_fetchable(candidate):
     """Whether a location can actually be retrieved.
 
     Neurostore's ``filename`` is sometimes a bare basename
-    ("spmT_0001_2.nii.gz") rather than a location, which looks like a NIfTI but
-    cannot be fetched. Treat a candidate as usable only if it is an absolute
-    URL or a file that exists on this machine.
+    ("spmT_0001_2.nii.gz"), which looks like a NIfTI but cannot be fetched.
     """
     if not candidate:
         return False
@@ -100,17 +82,10 @@ def select_image_url(image):
     """Pick the location to download for an image entry.
 
     Which of ``url`` and ``filename`` holds the NIfTI depends on how the image
-    reached Neurostore, so neither field can be trusted by position:
-
-    * ingested from NeuroVault -- ``url`` is the NIfTI, ``filename`` is a bare
-      basename;
-    * uploaded by compose -- ``url`` is the NeuroVault landing page,
-      ``filename`` is the NIfTI.
-
-    Both shapes exist in production, so choose on content: the candidate that
-    is both fetchable and named like a NIfTI. Returning None is deliberate when
-    neither qualifies -- a landing page downloads successfully as HTML, and a
-    NIfTI-named file full of HTML is a much worse failure than a missing map.
+    reached Neurostore -- ingested from NeuroVault it is ``url``, with a bare
+    basename in ``filename``; uploaded by compose it is ``filename``, with the
+    NeuroVault landing page in ``url``. So choose on content, and return None
+    rather than a landing page, which would download happily as HTML.
     """
     candidates = (image.get("filename"), image.get("url"))
 
@@ -124,18 +99,14 @@ def select_image_url(image):
 def _local_name(image, source_url):
     """Build a stable, collision-free filename for a downloaded image."""
     basename = os.path.basename(urlparse(str(source_url)).path) or "image.nii.gz"
-    # Include a hash of the URL so two studies' "z.nii.gz" cannot collide.
+    # Hash the URL so two studies' "z.nii.gz" cannot collide.
     digest = hashlib.md5(str(source_url).encode("utf-8")).hexdigest()[:10]
     image_id = image.get("id") or digest
     return f"{image_id}_{digest}_{basename}"
 
 
 def _local_source(source_url):
-    """Return a local path for a source that is already on this filesystem.
-
-    Studysets normally carry remote URLs, but a file path or a file:// URL is
-    valid too, and going through requests for those would fail.
-    """
+    """Return a local path for a source already on this filesystem, or None."""
     text = str(source_url)
     parsed = urlparse(text)
 
@@ -149,8 +120,6 @@ def _local_source(source_url):
     return candidate if candidate.is_file() else None
 
 
-# A gzip member, or an uncompressed NIfTI-1/NIfTI-2 header. Enough to tell a
-# real map from an HTML error page, which is the failure that matters here.
 _GZIP_MAGIC = b"\x1f\x8b"
 _NIFTI_SIZEOF_HDR = (b"\x5c\x01\x00\x00", b"\x00\x00\x01\x5c")  # 348, both endians
 
@@ -158,10 +127,8 @@ _NIFTI_SIZEOF_HDR = (b"\x5c\x01\x00\x00", b"\x00\x00\x01\x5c")  # 348, both endi
 def _is_nifti_bytes(payload):
     """Whether downloaded bytes plausibly start a NIfTI (or a gzipped one).
 
-    A landing page or an error page returns HTTP 200 with HTML, so
-    ``raise_for_status`` does not catch it. Rejecting it here keeps a file that
-    nibabel cannot open from being written into the cache, where it would fail
-    every subsequent run too.
+    An error page arrives with HTTP 200, so ``raise_for_status`` does not catch
+    it, and caching one under a .nii.gz name would break every later run too.
     """
     if len(payload) < 4:
         return False
@@ -175,15 +142,15 @@ def _download(source_url, destination, session=None, timeout=60):
     if destination.is_file() and destination.stat().st_size > 0:
         return destination
 
-    # Write to a temporary name first so an interrupted run cannot leave a
-    # truncated file behind that a later run would treat as cached.
+    # Written under a temporary name so an interrupted run cannot leave a
+    # truncated file that a later run would treat as cached.
     partial = destination.with_suffix(destination.suffix + ".part")
 
     local = _local_source(source_url)
     if local is not None:
-        # Already on disk, but still copy it in: every map has to sit under the
-        # one directory that becomes the studyset's base path, or NiMARE will
-        # resolve the relative paths it derives against the wrong root.
+        # Copied in even though it is on disk: every map has to sit under the
+        # directory that becomes the studyset's base path, or NiMARE resolves
+        # the relative paths it derives against the wrong root.
         shutil.copyfile(local, partial)
     else:
         getter = session.get if session is not None else requests.get
@@ -211,9 +178,8 @@ def download_studyset_images(
     """Download every usable image and rewrite the studyset to local paths.
 
     Images NiMARE cannot use, and images that fail to download, are dropped
-    from the returned studyset rather than aborting the run: NiMARE's
-    ``drop_invalid`` handles the resulting gaps, and losing one map should not
-    cost the whole meta-analysis.
+    from the studyset rather than aborting the run; ``drop_invalid`` handles the
+    resulting gaps.
 
     Parameters
     ----------
@@ -226,8 +192,7 @@ def download_studyset_images(
         Session to issue requests through. Useful for tests and for connection
         reuse.
     max_workers : :obj:`int`, optional
-        Maximum concurrent downloads. NeuroVault is the bottleneck, so this is
-        deliberately modest.
+        Maximum concurrent downloads.
     timeout : :obj:`int`, optional
         Per-request timeout in seconds.
 
@@ -237,23 +202,19 @@ def download_studyset_images(
         The studyset, with each surviving image's ``filename`` and ``url``
         pointing at a local file.
     dropped : :obj:`dict`
-        Analysis id to a tuple of descriptions of the maps that analysis lost,
-        so a caller can say which maps are not in the meta-analysis and why
-        rather than only how many.
+        Analysis id to a tuple of descriptions of the maps that analysis lost.
     """
     image_dir = Path(image_dir)
     image_dir.mkdir(parents=True, exist_ok=True)
 
-    # Analysis id -> the maps it lost, and why. Collected as the studyset is
-    # walked rather than counted at the end, because "12 images were dropped"
-    # is not something a user can act on.
+    # Analysis id -> the maps it lost, and why.
     dropped = {}
 
     def _record(analysis, image, why):
         label = image.get("value_type") or "untyped"
         dropped.setdefault(analysis.get("id"), []).append(f"{label} ({why})")
 
-    # Collect the work first so it can be done concurrently.
+    # Collected first so the downloads can run concurrently.
     jobs = []
     for study in studyset_dict.get("studies") or []:
         for analysis in study.get("analyses") or []:
@@ -336,9 +297,8 @@ def _safe(func):
 def _resolve_duplicate_types(images):
     """Keep one image per NiMARE type, choosing deterministically.
 
-    ``convert_nimads_to_dataset`` assigns images into a dict keyed by type, so
-    a duplicate would silently overwrite its predecessor and leave the result
-    dependent on ordering. Pick explicitly instead.
+    The conversion to a Dataset keys images by type, so a duplicate would
+    otherwise be resolved by ordering.
 
     Returns
     -------

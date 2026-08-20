@@ -41,69 +41,6 @@ def test_requires_large_task_false_when_method_differs():
     assert run_handler._requires_large_task(spec) is False
 
 
-def test_requires_large_task_for_ibma_with_fwe():
-    """FWE is the one image-based path that is heavy.
-
-    For an image-based run it means PermutedOLS's permutation test, since that
-    is the only image-based estimator with FWE_enabled.
-    """
-    spec = {
-        "type": "IBMA",
-        "estimator": {"type": "PermutedOLS"},
-        "corrector": {"type": "FWECorrector", "args": {"method": "montecarlo"}},
-    }
-    assert run_handler._requires_large_task(spec)
-
-
-def test_requires_large_task_false_for_ibma_without_fwe():
-    """An image-based run's inputs are not what makes it expensive.
-
-    Measured on 27 studies and 39 images with aggressive_mask=False: 3.06 GiB
-    peak against a 30 GiB limit, 227s on four vCPU. The standard task is the
-    right size, and escalating every image-based run would have paid 4x the cost
-    for nothing.
-    """
-    spec = {
-        "type": "IBMA",
-        "estimator": {"type": "Stouffers"},
-        "corrector": {"type": "FDRCorrector", "args": {"method": "indep"}},
-    }
-    assert run_handler._requires_large_task(spec) is False
-
-
-def test_requires_large_task_false_for_ibma_with_no_corrector():
-    spec = {"type": "IBMA", "estimator": {"type": "Stouffers"}, "corrector": None}
-    assert run_handler._requires_large_task(spec) is False
-
-
-def test_requires_large_task_ignores_spec_type_casing():
-    """Specifications store the type uppercase, but that is not guaranteed."""
-    spec = {"type": "ibma", "corrector": {"type": "FWECorrector", "args": {}}}
-    assert run_handler._requires_large_task(spec)
-
-
-def test_requires_large_task_false_for_cbma_with_fdr():
-    spec = {
-        "type": "CBMA",
-        "corrector": {"type": "FDRCorrector", "args": {"method": "indep"}},
-    }
-    assert run_handler._requires_large_task(spec) is False
-
-
-def test_cbma_fwe_still_needs_the_montecarlo_method():
-    """Bonferroni FWE is cheap for a coordinate-based run; montecarlo is not."""
-    bonferroni = {
-        "type": "CBMA",
-        "corrector": {"type": "FWECorrector", "args": {"method": "bonferroni"}},
-    }
-    montecarlo = {
-        "type": "CBMA",
-        "corrector": {"type": "FWECorrector", "args": {"method": "montecarlo"}},
-    }
-    assert run_handler._requires_large_task(bonferroni) is False
-    assert run_handler._requires_large_task(montecarlo)
-
-
 @pytest.mark.vcr(record_mode="none")
 def test_select_task_size_uses_large_for_montecarlo():
     task_size = run_handler._select_task_size(
@@ -335,12 +272,6 @@ def test_results_handler_missing_job_id(monkeypatch):
 
 
 def test_task_size_logs_when_the_specification_cannot_be_read(monkeypatch, caplog):
-    """A guessed task size has to leave a trace.
-
-    An image-based run on the standard task shows up afterwards as an
-    unexplained slowdown or OOM, with nothing recording that the specification
-    was never read.
-    """
     monkeypatch.setattr(run_handler, "_fetch_meta_analysis", lambda *args: None)
 
     with caplog.at_level(logging.INFO):

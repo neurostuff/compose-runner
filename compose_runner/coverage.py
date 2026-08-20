@@ -1,24 +1,11 @@
-"""Report what an image-based meta-analysis actually used, after it has run.
+"""Report what an image-based meta-analysis used, after it has run.
 
-Real studysets are uneven. One study uploads a t-statistic map, the next a
-z-map, a third a beta map with no variance to go with it, and a fourth only an
-ROI mask. NiMARE handles that on its own: :class:`~nimare.workflows.IBMAWorkflow`
-runs :class:`~nimare.transforms.ImageTransformer` over whatever the estimator
-requires, converting what it can, and ``drop_invalid`` then discards whatever is
-still incomplete. Both steps are silent, so a meta-analysis can rest on a third
-of the studies the user selected and say nothing about it.
-
-Nothing here repeats any of that work. The fitted estimator already holds the
-answer in two places:
-
-``estimator.inputs_["id"]``
-    the analyses that made it in, after everything was dropped.
-``estimator.dataset.images``
-    the image table *after* the transform, so comparing it with the table that
-    was submitted says which maps NiMARE converted rather than received.
-
-So this reads those, matches them against the studyset that went in, and turns
-the result into something a user can act on.
+:class:`~nimare.workflows.IBMAWorkflow` converts the maps it can and silently
+drops the rest, so a meta-analysis can rest on a fraction of the studies the
+user selected without saying so. Nothing here repeats that work; the fitted
+estimator already holds the answer in ``inputs_["id"]`` (the analyses that made
+it in) and ``estimator.dataset.images`` (the image table after the transform,
+which compared against the submitted table says what was converted).
 """
 
 import logging
@@ -36,9 +23,8 @@ def estimator_requirements(estimator):
     """Read an estimator's ``_required_inputs`` as image and metadata targets."""
     required = getattr(estimator, "_required_inputs", {}) or {}
     images, metadata = [], []
-    for input_name, spec in required.items():
-        kind, detail = (spec if isinstance(spec, (tuple, list)) else (spec, None))[:2]
-        target = detail or input_name
+    for input_name, (kind, target) in required.items():
+        target = target or input_name
         if kind == "image":
             images.append(target)
         elif kind == "metadata":
@@ -49,9 +35,8 @@ def estimator_requirements(estimator):
 def _held_types(images_df):
     """Map each row's full id to the image types it holds.
 
-    Uses ``notna`` rather than truthiness: NiMARE's table has a column per type
-    across the whole studyset, and an absent path comes back as ``NaN``, which
-    is truthy. Taking truthiness reports every analysis as holding every type.
+    ``notna`` rather than truthiness: the table has a column per type across the
+    whole studyset, and an absent path comes back as ``NaN``, which is truthy.
     """
     if images_df is None:
         return {}
@@ -82,7 +67,7 @@ class AnalysisCoverage:
     missing_images: frozenset = frozenset()
     #: Metadata the estimator requires, when that is the remaining explanation.
     missing_metadata: frozenset = frozenset()
-    #: Maps dropped before NiMARE saw them, with the reason for each.
+    #: Maps dropped before NiMARE saw them, with a reason for each.
     dropped_maps: tuple = ()
     included: bool = False
 
@@ -131,7 +116,7 @@ class CoverageReport:
 
     @property
     def n_studies_included(self):
-        """Independent studies backing the result, which is what the dof reflects."""
+        """Independent studies backing the result."""
         return len({a.study_id for a in self.included})
 
     def summary(self):
@@ -211,9 +196,9 @@ def _build(studyset, estimator, before, after, fitted_ids, dropped_maps):
     report = CoverageReport(image_targets=image_targets, metadata_targets=metadata_targets)
     for study in studyset.studies:
         for analysis in study.analyses:
-            # NiMARE keys images by "<study_id>-<analysis_id>"; rebuild that
-            # rather than splitting inputs_["id"], which would guess wrong the
-            # moment an id contains a hyphen.
+            # NiMARE keys images by "<study_id>-<analysis_id>". Rebuilt rather
+            # than split back out of inputs_["id"], where a hyphen in either id
+            # would make the split ambiguous.
             full_id = f"{study.id}-{analysis.id}"
             supplied = before.get(full_id, frozenset())
             produced = after.get(full_id, supplied)
@@ -250,7 +235,7 @@ def describe_result(results, studyset, dropped_maps=None):
         The studyset that was submitted, before NiMARE transformed anything.
     dropped_maps : :obj:`dict`, optional
         Analysis id to descriptions of maps that never reached NiMARE, as
-        recorded while the images were staged. Reporting only.
+        recorded while the images were staged.
 
     Returns
     -------
@@ -274,8 +259,7 @@ def describe_submission(studyset, estimator, dropped_maps=None):
     """Report what was submitted, for when the fit never got far enough to ask.
 
     NiMARE raises ``No images were found for a required input`` when nothing
-    survives, and at that point there is no fitted estimator to read. This says
-    what each analysis held, which is what makes that message actionable.
+    survives, and at that point there is no fitted estimator to read.
     """
     return _build(
         studyset,

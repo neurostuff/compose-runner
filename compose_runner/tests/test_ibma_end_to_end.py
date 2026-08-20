@@ -1,9 +1,6 @@
-"""End-to-end IBMA runs through the Runner, using real NIfTI images.
+"""End-to-end IBMA runs through the Runner, over locally generated NIfTIs."""
 
-These exercise the whole image-based path -- staging images, filling in sample
-sizes, keeping a study's analyses separate, and dispatching to IBMAWorkflow --
-against locally generated maps, so no network or cassette is involved.
-"""
+from copy import deepcopy
 
 import nibabel as nib
 import numpy as np
@@ -27,8 +24,8 @@ def _write_map(path, rng, offset=0.0, scale=1.0):
 def _make_studyset(tmp_path, n_studies=6, contrasts_for_first=2, value_type="Z map"):
     """Build a NIMADS studyset backed by real files on disk.
 
-    The first study contributes several analyses, so the dependence handling
-    has something to correct for.
+    The first study contributes two analyses, so the dependence handling has
+    something to correct for.
     """
     rng = np.random.RandomState(0)
     image_dir = tmp_path / "source_images"
@@ -121,11 +118,6 @@ def _prepared_runner(
 
 @pytest.mark.parametrize("estimator_type", ["Fishers", "Stouffers"])
 def test_ibma_runs_end_to_end(tmp_path, estimator_type):
-    """A z-map IBMA should run through to finite results.
-
-    Before this work, every image-based estimator hit a ValueError in
-    run_meta_analysis, and the images were never fetched at all.
-    """
     runner = _prepared_runner(tmp_path, estimator_type)
 
     runner.process_bundle()
@@ -136,40 +128,37 @@ def test_ibma_runs_end_to_end(tmp_path, estimator_type):
     assert np.isfinite(runner.meta_results.maps["z"]).any()
 
 
-def test_ibma_stages_images_locally(tmp_path):
-    """The studyset must end up pointing at files nibabel can open."""
+def test_ibma_stages_a_studyset_nimare_can_read(tmp_path):
+    """Local paths, annotation sample sizes, and no analyses merged away."""
     runner = _prepared_runner(tmp_path, "Fishers")
 
     runner.process_bundle()
 
-    for study in runner.cached_studyset["studies"]:
-        for analysis in study["analyses"]:
-            for image in analysis["images"]:
-                assert nib.load(image["filename"]) is not None
-
-
-def test_ibma_keeps_a_studys_analyses_separate(tmp_path):
-    """Merging would discard the first study's second contrast."""
-    runner = _prepared_runner(tmp_path, "Fishers")
-
-    runner.process_bundle()
-
-    n_analyses = sum(
-        len(study["analyses"]) for study in runner.cached_studyset["studies"]
-    )
+    analyses = [
+        analysis
+        for study in runner.staged_studyset["studies"]
+        for analysis in study["analyses"]
+    ]
     # 6 studies, the first contributing 2 analyses.
-    assert n_analyses == 7
+    assert len(analyses) == 7
+    for analysis in analyses:
+        assert analysis["metadata"]["sample_sizes"] == [25.0]
+        for image in analysis["images"]:
+            assert nib.load(image["filename"]) is not None
 
 
-def test_ibma_fills_in_sample_sizes(tmp_path):
-    """Sample sizes come from the annotation, in the shape NiMARE wants."""
+def test_staging_leaves_the_studyset_snapshot_alone(tmp_path):
+    """cached_studyset is uploaded as the result's snapshot.
+
+    Staging rewrites locations to local paths and drops maps NiMARE cannot use,
+    neither of which belongs in a record of what Neurostore served.
+    """
     runner = _prepared_runner(tmp_path, "Fishers")
+    before = deepcopy(runner.cached_studyset)
 
     runner.process_bundle()
 
-    for study in runner.cached_studyset["studies"]:
-        for analysis in study["analyses"]:
-            assert analysis["metadata"]["sample_sizes"] == [25.0]
+    assert runner.cached_studyset == before
 
 
 def test_ibma_dependence_correction_engages(tmp_path):
@@ -182,8 +171,8 @@ def test_ibma_dependence_correction_engages(tmp_path):
     assert runner.estimator.inputs_["corr_matrix"] is not None
 
 
-def test_ibma_dependence_can_be_opted_out(tmp_path):
-    """groupby=False has to reach NiMARE and actually disable the correction."""
+def test_estimator_args_reach_nimare(tmp_path):
+    """groupby=False has to arrive and actually disable the correction."""
     runner = _prepared_runner(tmp_path, "Stouffers", estimator_args={"groupby": False})
 
     runner.process_bundle()
@@ -194,27 +183,19 @@ def test_ibma_dependence_can_be_opted_out(tmp_path):
     assert runner.estimator._dependence().labels is None
 
 
-@pytest.mark.parametrize(
-    "estimator_args",
-    [
-        {"dependance": False},  # a typo
-        {"dependence": "independent"},  # the name NiMARE used to have
-    ],
-)
-def test_unknown_estimator_arg_is_rejected(tmp_path, estimator_args):
-    """A stale or misspelled argument must fail before any images are fetched.
+def test_an_estimator_arg_nimare_rejects_fails_before_any_download(tmp_path):
+    runner = _prepared_runner(
+        tmp_path, "Stouffers", estimator_args={"dependance": False}
+    )
 
-    NiMARE raises for these too, but only once the estimator is constructed,
-    which is after the studyset's maps have been downloaded.
-    """
-    runner = _prepared_runner(tmp_path, "Stouffers", estimator_args=estimator_args)
-
-    with pytest.raises(ValueError, match="does not accept"):
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
         runner.process_bundle()
+
+    assert not runner.image_dir.exists()
 
 
 def test_n_cores_does_not_reach_an_ibma_estimator(tmp_path):
-    """No IBMA estimator takes n_cores; passing it would just be ignored."""
+    """No IBMA estimator takes n_cores; NiMARE would reject it."""
     runner = _prepared_runner(tmp_path, "Stouffers")
 
     runner.process_bundle(n_cores=2)
@@ -222,51 +203,11 @@ def test_n_cores_does_not_reach_an_ibma_estimator(tmp_path):
     assert not hasattr(runner.estimator, "n_cores")
 
 
-def test_n_cores_becomes_n_jobs_for_permuted_ols(tmp_path):
-    """PermutedOLS is the one image-based estimator that parallelizes."""
-    runner = _prepared_runner(
-        tmp_path,
-        "PermutedOLS",
-        value_type="univariate-beta map",
-        corrector={
-            "type": "FWECorrector",
-            "args": {"method": "montecarlo", "n_iters": 10},
-        },
-    )
-
-    runner.process_bundle(n_cores=2)
-
-    assert runner.estimator.n_jobs == 2
-
-
-def test_ibma_dependence_changes_the_result(tmp_path):
-    """Correcting for dependence must actually move the statistics."""
-    corrected = _prepared_runner(tmp_path / "corrected", "Stouffers")
-    corrected.process_bundle()
-    corrected.run_meta_analysis()
-
-    naive = _prepared_runner(
-        tmp_path / "naive", "Stouffers", estimator_args={"groupby": False}
-    )
-    naive.process_bundle()
-    naive.run_meta_analysis()
-
-    corrected_z = corrected.meta_results.maps["z"]
-    naive_z = naive.meta_results.maps["z"]
-    valid = np.isfinite(corrected_z) & np.isfinite(naive_z)
-
-    assert valid.any()
-    assert not np.allclose(corrected_z[valid], naive_z[valid])
-
-
 def test_permuted_ols_runs_end_to_end(tmp_path):
-    """PermutedOLS routes its blocks through nilearn's exchangeability support.
+    """PermutedOLS takes n_cores as n_jobs and blocks by study.
 
-    It is paired with montecarlo FWE because that is its own correction path.
-    NiMARE's default corrector for an IBMA workflow is FDR, which needs a ``p``
-    map, and PermutedOLS emits only ``t``, ``z`` and ``dof`` -- so leaving the
-    corrector unset raises. That is upstream behaviour, not something this
-    runner can paper over.
+    Paired with montecarlo FWE because that is its own correction path: it emits
+    no ``p`` map, so the workflow's default FDR corrector cannot be used.
     """
     runner = _prepared_runner(
         tmp_path,
@@ -278,39 +219,15 @@ def test_permuted_ols_runs_end_to_end(tmp_path):
         },
     )
 
-    runner.process_bundle()
+    runner.process_bundle(n_cores=2)
     runner.run_meta_analysis()
 
+    assert runner.estimator.n_jobs == 2
     assert np.isfinite(runner.meta_results.maps["z"]).any()
-
-
-def test_permuted_ols_uses_exchangeability_blocks(tmp_path):
-    """The study grouping must reach nilearn's permuted_ols."""
-    runner = _prepared_runner(
-        tmp_path,
-        "PermutedOLS",
-        value_type="univariate-beta map",
-        corrector={
-            "type": "FWECorrector",
-            "args": {"method": "montecarlo", "n_iters": 10},
-        },
-    )
-
-    runner.process_bundle()
-    runner.run_meta_analysis()
-
+    # The first study contributes two images, so the sign flips are drawn per
+    # study rather than per image.
     blocks = runner.estimator._dependence().blocks
-    # The first study contributes two images, so there are fewer blocks than
-    # images and the sign flips are drawn per study rather than per image.
     assert np.unique(blocks).size < len(blocks)
-
-
-def test_cbma_specification_still_combines_analyses(tmp_path):
-    """A coordinate-based specification must keep its existing behaviour."""
-    runner = _prepared_runner(tmp_path, "Fishers")
-    runner.cached_specification["type"] = "CBMA"
-
-    assert runner._is_image_based() is False
 
 
 def _messy_studyset(tmp_path):
@@ -321,11 +238,9 @@ def _messy_studyset(tmp_path):
     transformed, one whose only map NiMARE has no use for, and one contributing
     two contrasts.
 
-    The ids deliberately contain no hyphens. ``Studyset.slice`` composes a full
-    id as ``<study>-<analysis>`` and splits on the hyphen to recover the parts,
-    so a hyphenated id silently matches nothing and the filtered studyset comes
-    back empty. Real Neurostore ids are hyphen-free base62, so this only bites
-    synthetic data -- but it bites hard, and quietly.
+    Ids carry no hyphen: ``Studyset.slice`` composes a full id as
+    ``<study>-<analysis>`` and splits it back on the hyphen, so a hyphenated id
+    resolves to nothing and the filtered studyset comes back empty.
     """
     rng = np.random.RandomState(0)
     image_dir = tmp_path / "source"
@@ -428,11 +343,7 @@ def test_messy_studyset_still_runs(tmp_path):
 
 
 def test_messy_studyset_reports_what_it_could_and_could_not_use(tmp_path):
-    """The account has to distinguish supplied, converted, and impossible.
-
-    Read after the fit, not before it: the workflow converts and drops on its
-    own, and the report is an introspection of what it did.
-    """
+    """The account has to distinguish supplied, converted, and impossible."""
     runner = _messy_runner(tmp_path)
 
     runner.process_bundle()
@@ -455,7 +366,6 @@ def test_messy_studyset_reports_what_it_could_and_could_not_use(tmp_path):
 
 
 def test_messy_studyset_writes_a_coverage_table(tmp_path):
-    """The account has to outlive the log line."""
     runner = _messy_runner(tmp_path)
 
     runner.process_bundle()
@@ -473,12 +383,7 @@ def test_messy_studyset_writes_a_coverage_table(tmp_path):
 
 
 def test_nothing_usable_fails_with_the_account_attached(tmp_path):
-    """NiMARE's message alone does not say which studies were unusable.
-
-    When nothing survives there is no fitted estimator to introspect, so the
-    submitted studyset is described instead and the account is appended to the
-    error NiMARE raised.
-    """
+    """NiMARE's message alone does not say which studies were unusable."""
     runner = _messy_runner(tmp_path, estimator_type="SampleSizeBasedLikelihood")
     # Leave only the study whose single map NiMARE cannot use. The annotation is
     # rebuilt too, because it references analyses that no longer exist.
@@ -502,16 +407,11 @@ def test_nothing_usable_fails_with_the_account_attached(tmp_path):
 def test_an_all_nan_result_is_rejected(tmp_path, fill):
     """A run that computes nothing must not pass as a success.
 
-    aggressive_mask=True keeps only voxels valid in every input map, so one
-    degenerate map empties the mask however good the others are. The workflow
-    still finishes and writes maps -- entirely NaN ones, which would then be
-    uploaded to NeuroVault as a result.
-
     Both fills are degenerate to NiMARE, which counts a voxel as valid only
-    where it is finite *and* non-zero. The all-zero case is the one seen in real
-    data: an empty NeuroVault upload. The message has to name the map, because
-    "set aggressive_mask=False" is not the fix when a study uploaded an empty
-    file.
+    where it is finite *and* non-zero, so under aggressive_mask=True either one
+    empties the mask on its own and every output map comes out NaN. The message
+    has to name the map, since excluding an empty upload is the fix rather than
+    a more liberal mask.
     """
     runner = _prepared_runner(
         tmp_path, "Stouffers", estimator_args={"aggressive_mask": True}

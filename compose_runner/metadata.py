@@ -1,12 +1,10 @@
 """Fill in the analysis metadata that IBMA estimators need.
 
 ``FixedEffectsHedges`` and ``SampleSizeBasedLikelihood`` require a
-``sample_sizes`` entry in each analysis's metadata, and it also unlocks
-``Stouffers(use_sample_size=True)`` and NiMARE's z<->t conversions.
-
-Compose records sample size on the annotation note, or on the study's
-metadata, rather than on the analysis, so it has to be copied across before
-the studyset is converted to a Dataset.
+``sample_sizes`` entry per analysis, and it also unlocks
+``Stouffers(use_sample_size=True)`` and NiMARE's z<->t conversions. Compose
+records sample size on the annotation note or on the study rather than on the
+analysis, so it has to be copied across before the Dataset is built.
 """
 
 import logging
@@ -20,8 +18,7 @@ SAMPLE_SIZE_KEYS = ("sample_sizes", "sample_size", "n", "sample-size")
 def _coerce_sample_size(value):
     """Return a positive numeric sample size, or None.
 
-    Sample sizes arrive from free-form annotation columns, so they can be
-    strings, blank, or nonsense.
+    Annotation columns are free-form, so a value can be a string or nonsense.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -37,8 +34,7 @@ def _coerce_sample_size(value):
 def _coerce_sample_sizes(value):
     """Return a list of valid sample sizes from a scalar or a sequence.
 
-    NiMARE wants a sequence per analysis, but compose records a scalar, and an
-    already-converted studyset carries the sequence, so accept both.
+    NiMARE wants a sequence, compose records a scalar, so accept both.
     """
     if isinstance(value, (list, tuple)):
         numbers = [_coerce_sample_size(item) for item in value]
@@ -74,10 +70,7 @@ def apply_sample_sizes(studyset_dict, annotation_dict=None):
     """Copy sample sizes onto each analysis's metadata.
 
     Precedence is annotation note, then analysis metadata, then study metadata:
-    the annotation is the most specific and the most deliberately curated.
-
-    NiMARE expects ``sample_sizes`` to be a sequence per analysis, since an
-    analysis can in principle pool several groups.
+    the annotation is the most specific of the three.
 
     Parameters
     ----------

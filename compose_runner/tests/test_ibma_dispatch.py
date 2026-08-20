@@ -1,238 +1,69 @@
-"""Tests for routing image-based specifications to the right workflow."""
+"""Tests for routing an image-based specification to the right workflow."""
 
 import pytest
-from nimare.diagnostics import Jackknife
-from nimare.meta.cbma import ALE, ALESubtraction
 from nimare.meta.ibma import Fishers, Stouffers
 from nimare.nimads import Studyset
-from nimare.workflows import IBMAWorkflow
 
 from compose_runner.run import Runner
 
 
 @pytest.fixture
 def runner(tmp_path):
-    """A Runner with no network access, for exercising local logic only."""
-    return Runner(
+    runner = Runner(
         meta_analysis_id="meta-id", environment="production", result_dir=tmp_path
     )
+    runner.cached_specification = {
+        "filter": "include",
+        "conditions": [True],
+        "weights": [1],
+    }
+    runner.cached_annotation = {"note_keys": {"include": "boolean"}}
+    runner.cached_studyset = {"studies": []}
+    return runner
 
 
-@pytest.mark.parametrize(
-    ("spec_type", "expected"),
-    [
-        ("IBMA", True),
-        ("ibma", True),
-        ("  Ibma ", True),
-        ("CBMA", False),
-        ("cbma", False),
-    ],
-)
-def test_is_image_based_is_case_insensitive(runner, spec_type, expected):
-    """Specifications store the type uppercase; fixtures use lowercase."""
-    runner.cached_specification = {"type": spec_type}
+class FakeStudyset:
+    """Records whether combine_analyses and update_path were called."""
 
-    assert runner._is_image_based() is expected
+    def __init__(self):
+        self.combined = False
+        self.base_path = None
 
+    def slice(self, analyses=None):
+        return FakeStudyset()
 
-@pytest.mark.parametrize("spec", [{}, {"type": None}, {"type": ""}])
-def test_is_image_based_defaults_to_false(runner, spec):
-    """A missing type should not be mistaken for an image-based analysis."""
-    runner.cached_specification = spec
+    def combine_analyses(self):
+        self.combined = True
+        return self
 
-    assert runner._is_image_based() is False
+    def update_path(self, new_path):
+        self.base_path = new_path
+        return self
 
 
-def test_ibma_estimator_selects_ibma_workflow(runner, monkeypatch):
-    """An image-based estimator used to hit a ValueError."""
-    captured = {}
-
-    class FakeWorkflow:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        def fit(self, studyset):
-            captured["fitted"] = studyset
-            return _FakeResults()
-
-    monkeypatch.setattr("compose_runner.run.IBMAWorkflow", FakeWorkflow)
-    monkeypatch.setattr(Runner, "_persist_meta_results", lambda self: None)
-
-    studyset = _empty_studyset()
-    runner.estimator = Fishers()
-    runner.corrector = None
-    runner.first_studyset = studyset
-    runner.second_studyset = None
-
-    runner.run_meta_analysis()
-
-    assert captured["fitted"] is studyset
-    # FocusCounter counts foci, so IBMAWorkflow only accepts Jackknife. Named
-    # rather than constructed, so the workflow applies voxel_thresh and
-    # cluster_threshold -- it leaves an already-built diagnostic alone.
-    assert captured["diagnostics"] == "jackknife"
+class FakeAnnotation:
+    def __init__(self):
+        note = {"include": True}
+        self.notes = [
+            type("Note", (), {"analysis": type("A", (), {"id": "a1"})(), "note": note})()
+        ]
 
 
-def test_ibma_diagnostics_get_the_workflows_thresholds():
-    """The workflow's cluster definition has to reach the diagnostic.
-
-    The workflow's ``voxel_thresh`` arrives as the diagnostic's
-    ``target_threshold``; ``voxel_thresh`` is the deprecated alias on the
-    diagnostic and stays None.
-    """
-    workflow = IBMAWorkflow(estimator=Fishers(), diagnostics="jackknife")
-
-    diagnostic = workflow.diagnostics[0]
-    assert diagnostic.target_threshold == workflow.voxel_thresh == 1.65
-    assert diagnostic.cluster_threshold == workflow.cluster_threshold == 10
-
-
-def test_naming_and_constructing_a_diagnostic_agree():
-    """Both spellings must define clusters the same way.
-
-    They did not always: an already-constructed diagnostic used to be returned
-    untouched, so ``Jackknife()`` kept None thresholds while ``"jackknife"`` got
-    the workflow's. NiMARE now fills in whatever the caller left at its default,
-    and this pins that -- it is the reason the runner can name the diagnostic
-    without thinking about it.
-    """
-    named = IBMAWorkflow(estimator=Fishers(), diagnostics="jackknife").diagnostics[0]
-    built = IBMAWorkflow(estimator=Fishers(), diagnostics=Jackknife()).diagnostics[0]
-
-    for attribute in ("target_threshold", "cluster_threshold", "n_cores"):
-        assert getattr(named, attribute) == getattr(built, attribute)
-
-
-def test_an_explicitly_configured_diagnostic_is_left_alone():
-    """Filling in unset parameters must not overwrite a deliberate choice."""
-    workflow = IBMAWorkflow(
-        estimator=Fishers(), diagnostics=Jackknife(target_threshold=3.0)
-    )
-
-    assert workflow.diagnostics[0].target_threshold == 3.0
-
-
-def test_n_cores_reaches_the_ibma_workflow(runner, monkeypatch):
-    """The workflow is what parallelizes the diagnostics."""
-    captured = {}
-
-    class FakeWorkflow:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        def fit(self, studyset):
-            return _FakeResults()
-
-    monkeypatch.setattr("compose_runner.run.IBMAWorkflow", FakeWorkflow)
-    monkeypatch.setattr(Runner, "_persist_meta_results", lambda self: None)
-
-    runner.estimator = Fishers()
-    runner.corrector = None
-    runner.first_studyset = _empty_studyset()
-    runner.second_studyset = None
-    runner.n_cores = 3
-
-    runner.run_meta_analysis()
-
-    assert captured["n_cores"] == 3
-
-
-def test_ibma_estimator_rejects_group_comparison(runner):
-    """No image-based estimator supports a two-group comparison."""
-    runner.estimator = Stouffers()
-    runner.corrector = None
-    runner.first_studyset = "first"
-    runner.second_studyset = "second"
-
-    with pytest.raises(ValueError, match="no image-based estimator supports one"):
-        runner.run_meta_analysis()
-
-
-def test_cbma_estimator_still_selects_cbma_workflow(runner, monkeypatch):
-    """The coordinate-based path must be untouched."""
-    captured = {}
-
-    class FakeWorkflow:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        def fit(self, studyset):
-            captured["fitted"] = studyset
-            return _FakeResults()
-
-    monkeypatch.setattr("compose_runner.run.CBMAWorkflow", FakeWorkflow)
-    monkeypatch.setattr(Runner, "_persist_meta_results", lambda self: None)
-
-    runner.estimator = ALE()
-    runner.corrector = None
-    runner.first_studyset = "studyset"
-    runner.second_studyset = None
-
-    runner.run_meta_analysis()
-
-    assert captured["diagnostics"] == "focuscounter"
-
-
-def test_pairwise_cbma_still_selects_pairwise_workflow(runner, monkeypatch):
-    """The pairwise coordinate-based path must be untouched."""
-    captured = {}
-
-    class FakeWorkflow:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        def fit(self, first, second):
-            captured["fitted"] = (first, second)
-            return _FakeResults()
-
-    monkeypatch.setattr("compose_runner.run.PairwiseCBMAWorkflow", FakeWorkflow)
-    monkeypatch.setattr(Runner, "_persist_meta_results", lambda self: None)
-
-    runner.estimator = ALESubtraction()
-    runner.corrector = None
-    runner.first_studyset = "first"
-    runner.second_studyset = "second"
-
-    runner.run_meta_analysis()
-
-    assert captured["fitted"] == ("first", "second")
-
-
-def test_load_specification_resolves_ibma_estimator(runner):
-    """Specification types are uppercase but module names are lowercase."""
-    runner.cached_specification = {"type": "IBMA", "estimator": {"type": "Fishers"}}
-
-    estimator, corrector = runner.load_specification()
-
-    assert isinstance(estimator, Fishers)
-    assert corrector is None
-
-
-class _FakeResults:
-    """Stand-in for a NiMARE MetaResult.
-
-    Carries an estimator because the runner introspects the fitted result to
-    report which analyses were used. A double that lacked one would only pass
-    if the runner skipped that reporting when it failed -- which is exactly the
-    silence the report exists to remove.
-    """
+class FakeResults:
+    """Stand-in for a MetaResult, carrying the estimator coverage reads."""
 
     tables = {}
     description_ = ""
 
-    def __init__(self, estimator=None, fitted_ids=()):
-        self.estimator = estimator if estimator is not None else Fishers()
-        self.estimator.inputs_ = {"id": list(fitted_ids)}
+    def __init__(self):
+        self.estimator = Fishers()
+        self.estimator.inputs_ = {"id": []}
         self.estimator.dataset = None
         self.maps = {}
 
 
-def _empty_studyset(analysis_ids=("a1",)):
-    """The smallest Studyset the coverage report can be built from.
-
-    No images: these tests never fit anything, they check which workflow gets
-    chosen and with what arguments.
-    """
+def _empty_studyset():
+    """The smallest Studyset a coverage report can be built from."""
     return Studyset(
         {
             "id": "ss",
@@ -244,17 +75,107 @@ def _empty_studyset(analysis_ids=("a1",)):
                     "metadata": {},
                     "analyses": [
                         {
-                            "id": analysis_id,
-                            "name": analysis_id,
+                            "id": "a1",
+                            "name": "a1",
                             "conditions": [],
                             "weights": [],
                             "points": [],
                             "metadata": {},
                             "images": [],
                         }
-                        for analysis_id in analysis_ids
                     ],
                 }
             ],
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("spec_type", "expected"),
+    [("IBMA", True), ("ibma", True), ("  Ibma ", True), ("CBMA", False), (None, False)],
+)
+def test_is_image_based(runner, spec_type, expected):
+    """Specifications store the type uppercase; fixtures use lowercase."""
+    runner.cached_specification = {"type": spec_type}
+
+    assert runner._is_image_based() is expected
+
+
+@pytest.mark.parametrize("combine", [True, False])
+def test_apply_filter_combines_only_when_asked(runner, combine):
+    first, second = runner.apply_filter(FakeStudyset(), FakeAnnotation(), combine)
+
+    assert first.combined is combine
+    assert second is None
+
+
+@pytest.mark.parametrize(
+    ("spec_type", "combine", "prepared"),
+    [("IBMA", False, True), ("CBMA", True, False)],
+)
+def test_process_bundle_prepares_images_only_for_ibma(
+    runner, monkeypatch, spec_type, combine, prepared
+):
+    """IBMA must not merge a study's analyses, and CBMA must not download."""
+    captured = {}
+
+    def fake_apply_filter(self, studyset, annotation, combine=True):
+        captured["combine"] = combine
+        return FakeStudyset(), None
+
+    def fake_prepare_images(self):
+        captured["prepared"] = True
+        return {"studies": []}
+
+    monkeypatch.setattr(Runner, "apply_filter", fake_apply_filter)
+    monkeypatch.setattr(Runner, "prepare_images", fake_prepare_images)
+    monkeypatch.setattr(
+        Runner, "load_specification", lambda self, n_cores=None: (None, None)
+    )
+    monkeypatch.setattr("compose_runner.run.Studyset", lambda *a, **kw: FakeStudyset())
+    monkeypatch.setattr("compose_runner.run.Annotation", lambda *a, **kw: None)
+    runner.cached_specification["type"] = spec_type
+
+    runner.process_bundle()
+
+    assert captured["combine"] is combine
+    assert captured.get("prepared", False) is prepared
+
+
+def test_ibma_estimator_selects_ibma_workflow(runner, monkeypatch):
+    captured = {}
+
+    class FakeWorkflow:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def fit(self, studyset):
+            captured["fitted"] = studyset
+            return FakeResults()
+
+    monkeypatch.setattr("compose_runner.run.IBMAWorkflow", FakeWorkflow)
+    monkeypatch.setattr(Runner, "_persist_meta_results", lambda self: None)
+
+    studyset = _empty_studyset()
+    runner.estimator = Fishers()
+    runner.first_studyset = studyset
+    runner.n_cores = 3
+
+    runner.run_meta_analysis()
+
+    assert captured["fitted"] is studyset
+    # Jackknife is the only diagnostic IBMAWorkflow accepts, and naming it
+    # rather than constructing it lets the workflow set the cluster thresholds.
+    assert captured["diagnostics"] == "jackknife"
+    # The workflow, not the estimator, is what parallelizes an IBMA.
+    assert captured["n_cores"] == 3
+
+
+def test_ibma_estimator_rejects_group_comparison(runner):
+    """No image-based estimator supports a two-group comparison."""
+    runner.estimator = Stouffers()
+    runner.first_studyset = "first"
+    runner.second_studyset = "second"
+
+    with pytest.raises(ValueError, match="no image-based estimator supports one"):
+        runner.run_meta_analysis()

@@ -62,38 +62,25 @@ def _fetch_meta_analysis(
         return None
 
 
-def _is_fwe(specification: Dict[str, Any]) -> bool:
-    """Whether the specification asks for family-wise error correction."""
+def _requires_large_task(specification: Dict[str, Any]) -> bool:
+    if not isinstance(specification, dict):
+        return False
     corrector = specification.get("corrector")
-    return isinstance(corrector, dict) and corrector.get("type") == "FWECorrector"
-
-
-def _corrector_method(specification: Dict[str, Any]) -> Optional[str]:
-    """The corrector's method, wherever the frontend happened to put it."""
-    args = (specification.get("corrector") or {}).get("args")
+    if not isinstance(corrector, dict):
+        return False
+    if corrector.get("type") != "FWECorrector":
+        return False
+    args = corrector.get("args")
     if not isinstance(args, dict):
-        return None
+        return False
     method = args.get("method")
     if method is None:
         kwargs = args.get("**kwargs")
         if isinstance(kwargs, dict):
             method = kwargs.get("method")
-    return method if isinstance(method, str) else None
-
-
-def _requires_large_task(specification: Dict[str, Any]) -> bool:
-    if not isinstance(specification, dict):
-        return False
-
-    if str(specification.get("type") or "").strip().lower() == "ibma":
-        return _is_fwe(specification)
-
-    # Coordinate-based runs escalate only for the montecarlo null, which is
-    # where their cost is.
-    if not _is_fwe(specification):
-        return False
-    method = _corrector_method(specification)
-    return method is not None and method.lower() == "montecarlo"
+    if isinstance(method, str) and method.lower() == "montecarlo":
+        return True
+    return False
 
 
 def _select_task_size(
@@ -108,23 +95,20 @@ def _select_task_size(
             reason="specification_unavailable",
         )
         return DEFAULT_TASK_SIZE
-
     specification = doc.get("specification")
     try:
         if _requires_large_task(specification):
-            spec_type = str((specification or {}).get("type") or "").strip().lower()
             _log(
                 artifact_prefix,
                 "workflow.task_size_selected",
                 task_size="large",
-                reason="ibma_fwe" if spec_type == "ibma" else "montecarlo_fwe",
+                reason="montecarlo_fwe",
             )
             return "large"
     except Exception as exc:  # noqa: broad-except
         logger.warning(
             "Failed to evaluate specification for %s: %s", meta_analysis_id, exc
         )
-
     return DEFAULT_TASK_SIZE
 
 
