@@ -15,8 +15,15 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    "nimare>=0.17.0",
+    # Pointed at main until 0.21.0 is released. That release is where IBMA
+    # dependence handling and the `groupby` estimator argument land, where
+    # Stouffers loses `normalize_contrast_weights`, and where `aggressive_mask`
+    # starts defaulting to False; PyPI still only has 0.20.0, which has none of
+    # it. Swap back to `nimare>=0.21.0` once the release is out -- PyPI rejects
+    # direct references, so publishing this package needs that first.
+    "nimare @ git+https://github.com/neurostuff/NiMARE@main",
     "click",
+    "requests",
     "sentry-sdk",
     "numpy",
     "neurostore-sdk>=1.1",
@@ -38,6 +45,11 @@ aws = [
 
 [project.scripts]
 compose-run = "compose_runner.cli:cli"
+
+# Required while `nimare` is a git direct reference rather than a version.
+# Remove along with that reference once NiMARE 0.21.0 is on PyPI.
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.version]
 source = "vcs"
