@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -37,6 +38,34 @@ def test_requires_large_task_detection():
 
 def test_requires_large_task_false_when_method_differs():
     spec = {"corrector": {"type": "FWECorrector", "args": {"method": "bonferroni"}}}
+    assert run_handler._requires_large_task(spec) is False
+
+
+def test_requires_large_task_for_ibma_regardless_of_corrector():
+    """An image-based run is heavy because of its inputs, not its correction.
+
+    Every contrast contributes a full-resolution map that has to be downloaded
+    and held in memory, which the standard task is not sized for.
+    """
+    spec = {
+        "type": "IBMA",
+        "estimator": {"type": "Stouffers"},
+        "corrector": {"type": "FDRCorrector", "args": {"method": "indep"}},
+    }
+    assert run_handler._requires_large_task(spec)
+
+
+def test_requires_large_task_ignores_spec_type_casing():
+    """Specifications store the type uppercase, but that is not guaranteed."""
+    spec = {"type": "ibma", "corrector": None}
+    assert run_handler._requires_large_task(spec)
+
+
+def test_requires_large_task_false_for_cbma_with_fdr():
+    spec = {
+        "type": "CBMA",
+        "corrector": {"type": "FDRCorrector", "args": {"method": "indep"}},
+    }
     assert run_handler._requires_large_task(spec) is False
 
 
@@ -268,3 +297,37 @@ def test_results_handler_missing_job_id(monkeypatch):
     assert response["statusCode"] == 400
     assert body["status"] == "FAILED"
     assert "artifact_prefix" in body["error"]
+
+
+def test_task_size_logs_when_the_specification_cannot_be_read(monkeypatch, caplog):
+    """A guessed task size has to leave a trace.
+
+    An image-based run on the standard task shows up afterwards as an
+    unexplained slowdown or OOM, with nothing recording that the specification
+    was never read.
+    """
+    monkeypatch.setattr(run_handler, "_fetch_meta_analysis", lambda *args: None)
+
+    with caplog.at_level(logging.INFO):
+        task_size = run_handler._select_task_size("mid", "production", "job")
+
+    assert task_size == "standard"
+    assert "specification_unavailable" in caplog.text
+
+
+def test_task_size_logs_when_the_specification_is_not_nested(monkeypatch, caplog):
+    """?nested=true is what makes the specification a dict rather than an id.
+
+    Without it every IBMA would quietly be sized as coordinate-based.
+    """
+    monkeypatch.setattr(
+        run_handler,
+        "_fetch_meta_analysis",
+        lambda *args: {"specification": "Ahx3YQYb8Jx4"},
+    )
+
+    with caplog.at_level(logging.INFO):
+        task_size = run_handler._select_task_size("mid", "production", "job")
+
+    assert task_size == "standard"
+    assert "specification_not_nested" in caplog.text

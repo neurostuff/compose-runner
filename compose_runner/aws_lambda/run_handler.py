@@ -65,6 +65,16 @@ def _fetch_meta_analysis(
 def _requires_large_task(specification: Dict[str, Any]) -> bool:
     if not isinstance(specification, dict):
         return False
+
+    # Image-based meta-analyses need the larger task whatever their corrector.
+    # They download a full-resolution map per contrast, hold every one of them
+    # in memory as a single masked array, and -- under aggressive_mask=False,
+    # which is NiMARE's default as of 0.21.0 -- fit a separate model for each
+    # group of voxels sharing a validity pattern. None of that applies to a
+    # coordinate-based run, which only ever handles foci.
+    if str(specification.get("type") or "").strip().lower() == "ibma":
+        return True
+
     corrector = specification.get("corrector")
     if not isinstance(corrector, dict):
         return False
@@ -88,20 +98,43 @@ def _select_task_size(
 ) -> str:
     doc = _fetch_meta_analysis(meta_analysis_id, environment)
     if not doc:
+        # Sizing is a guess from here on. Logged rather than passed over, because
+        # an image-based run on the standard task looks like an unexplained
+        # slowdown or OOM afterwards, with nothing recording that the
+        # specification was never read.
+        _log(
+            artifact_prefix,
+            "workflow.task_size_selected",
+            task_size=DEFAULT_TASK_SIZE,
+            reason="specification_unavailable",
+        )
         return DEFAULT_TASK_SIZE
+
     specification = doc.get("specification")
     try:
         if _requires_large_task(specification):
+            spec_type = str((specification or {}).get("type") or "").strip().lower()
             _log(
                 artifact_prefix,
                 "workflow.task_size_selected",
                 task_size="large",
-                reason="montecarlo_fwe",
+                reason="ibma" if spec_type == "ibma" else "montecarlo_fwe",
             )
             return "large"
     except Exception as exc:  # noqa: broad-except
         logger.warning(
             "Failed to evaluate specification for %s: %s", meta_analysis_id, exc
+        )
+
+    if not isinstance(specification, dict):
+        # ?nested=true is what makes this a dict rather than an id string, so
+        # this means the response shape changed under us and every IBMA would
+        # quietly be sized as though it were coordinate-based.
+        _log(
+            artifact_prefix,
+            "workflow.task_size_selected",
+            task_size=DEFAULT_TASK_SIZE,
+            reason="specification_not_nested",
         )
     return DEFAULT_TASK_SIZE
 
