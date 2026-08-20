@@ -70,12 +70,14 @@ NiMARE's `z`/`t`/`beta`/`varcope`/`p` and drops the labels NiMARE has no use for
 | Step | Behaviour |
 | --- | --- |
 | `prepare_images` | Downloads every usable map into `<result_dir>/images`, rewrites the studyset to point at the local files, and caches across reruns. NiMARE hands paths to nibabel, which cannot read over HTTP. Records which maps it dropped and why, per analysis. |
-| `_report_coverage` | Runs NiMARE's transform, then says which analyses the estimator can use, which maps were derived, and what was left out. Writes `ibma_coverage.tsv`; raises only if nothing is usable. |
 | `apply_sample_sizes` | Copies a sample size onto each analysis's `metadata["sample_sizes"]`, preferring the annotation note, then analysis metadata, then study metadata. |
 | `apply_filter(combine=False)` | Keeps each analysis separate. `combine_analyses()` is right for CBMA, where the point is pooling foci, but for IBMA it concatenates a study's images into one analysis and the conversion to a Dataset keeps only one map per type, silently discarding every extra contrast — and destroying the study grouping the dependence correction needs. |
 | `load_specification` | Resolves estimator arguments through `compose_runner.estimator_args` and **rejects** any the estimator does not accept. |
 | `run_meta_analysis` | Dispatches to `IBMAWorkflow` with `diagnostics="jackknife"`. Group comparisons are rejected: no image-based estimator is pairwise. |
-| `_requires_large_task` | Routes every IBMA specification to the large ECS task, whatever its corrector. See the caveat below. |
+| `_fit_image_based` | Fits the workflow, then reports what it used. On the failure NiMARE raises when nothing survives, describes the submitted studyset instead and appends that to the message. |
+| `_describe_coverage` | Logs the account and writes `ibma_coverage.tsv` beside the results. |
+| `_check_result_is_not_empty` | Rejects a result that is NaN at every voxel, naming the input maps that have no finite non-zero value. |
+| `_requires_large_task` | Routes an IBMA specification to the large ECS task only when its corrector is FWE. See below. |
 
 ### Task sizing, and what it does not buy
 
