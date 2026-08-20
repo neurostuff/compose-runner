@@ -79,16 +79,52 @@ NiMARE's `z`/`t`/`beta`/`varcope`/`p` and drops the labels NiMARE has no use for
 
 ### Task sizing, and what it does not buy
 
-`_requires_large_task` returns True for any specification whose `type` is
-`IBMA`, so an image-based run gets 16 vCPU and 64 GiB instead of 4 and 30. Two
-things limit that.
+An image-based run escalates to the large task (16 vCPU / 64 GiB instead of 4 /
+30) **only when the corrector is FWE**. For an image-based specification that
+means `PermutedOLS`'s permutation test, since it is the only image-based
+estimator with `FWE_enabled`. Everything else stays on the standard task.
+
+That was measured rather than assumed, and the first version of this rule
+escalated every image-based run on the assumption that its inputs were what made
+it expensive. They are not. On the "language" studyset with
+`aggressive_mask=False`, pinned to four vCPU to emulate the standard task:
+
+| studies | images | voxel bags | cores | wall time | peak RSS |
+| --- | --- | --- | --- | --- | --- |
+| 9 | 14 | 13 | 4 | 44 s | 2.25 GiB |
+| 18 | 26 | 46 | 4 | 80 s | 2.56 GiB |
+| 27 | 39 | 263 | 4 | 232 s | 3.10 GiB |
+| 27 | 39 | 263 | 8 | 222 s | 4.99 GiB |
+
+Against a 30 GiB limit the worst case used 10%, and memory is almost all fixed
+overhead: 2.8x the images buys 1.36x the memory, or roughly a 2 GiB baseline plus
+~30 MB per image. That puts the standard task's ceiling near 900 images, far
+beyond any realistic studyset.
+
+More cores do not help either. Doubling from four to eight took 4% off the wall
+time and added 61% to peak memory, because each additional joblib worker holds
+its own copy of the estimator. `Stouffers` fits serially and the voxel-bag loop
+is sequential; only `Jackknife` parallelizes, and it is evidently bound by
+something other than CPU. So the large task's 16 vCPU would have bought roughly
+nothing at four times the price.
+
+The inputs that sound expensive are not. The masked array holding every map is
+`(39, 228483)` float32, or **36 MB**. The 3 GiB peak is the 4D concatenation
+during resampling plus those worker copies.
+
+FWE is the exception, and the reason the escalation still exists.
+`PermutedOLS.correct_fwe_montecarlo` hands `n_jobs` a genuinely parallel
+workload -- 5000 sign-flip permutations by default -- which is the one
+image-based path where cores are worth paying for.
+
+Two things limit the escalation where it does apply.
 
 **It only applies to runs submitted through the lambda.** `task_size` is chosen
 in `aws_lambda/run_handler.py` and reaches the state machine's Choice as
 `$.task_size`. Invoking `compose_runner.ecs_task` or the CLI directly bypasses
 the decision entirely — neither reads `task_size`.
 
-**And the escalation buys CPU and memory, not disk.** In
+**And it buys CPU, not disk.** In
 `infra/cdk/stacks/compose_runner_stack.py`, `ephemeral_storage_gib` is set only
 when `taskEphemeralStorageGiB` exceeds 20, and no deployed context overrides it,
 so both task definitions run on Fargate's default ~20 GiB — shared with the

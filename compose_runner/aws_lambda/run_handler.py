@@ -62,35 +62,45 @@ def _fetch_meta_analysis(
         return None
 
 
-def _requires_large_task(specification: Dict[str, Any]) -> bool:
-    if not isinstance(specification, dict):
-        return False
-
-    # Image-based meta-analyses need the larger task whatever their corrector.
-    # They download a full-resolution map per contrast, hold every one of them
-    # in memory as a single masked array, and -- under aggressive_mask=False,
-    # which is NiMARE's default as of 0.21.0 -- fit a separate model for each
-    # group of voxels sharing a validity pattern. None of that applies to a
-    # coordinate-based run, which only ever handles foci.
-    if str(specification.get("type") or "").strip().lower() == "ibma":
-        return True
-
+def _is_fwe(specification: Dict[str, Any]) -> bool:
+    """Whether the specification asks for family-wise error correction."""
     corrector = specification.get("corrector")
-    if not isinstance(corrector, dict):
-        return False
-    if corrector.get("type") != "FWECorrector":
-        return False
-    args = corrector.get("args")
+    return isinstance(corrector, dict) and corrector.get("type") == "FWECorrector"
+
+
+def _corrector_method(specification: Dict[str, Any]) -> Optional[str]:
+    """The corrector's method, wherever the frontend happened to put it."""
+    args = (specification.get("corrector") or {}).get("args")
     if not isinstance(args, dict):
-        return False
+        return None
     method = args.get("method")
     if method is None:
         kwargs = args.get("**kwargs")
         if isinstance(kwargs, dict):
             method = kwargs.get("method")
-    if isinstance(method, str) and method.lower() == "montecarlo":
-        return True
-    return False
+    return method if isinstance(method, str) else None
+
+
+def _requires_large_task(specification: Dict[str, Any]) -> bool:
+    if not isinstance(specification, dict):
+        return False
+
+    if str(specification.get("type") or "").strip().lower() == "ibma":
+        # Only the FWE path is heavy, and for an image-based run that means
+        # PermutedOLS's permutation test -- it is the only image-based estimator
+        # with FWE_enabled. Everything else measured comfortably inside the
+        # standard task: the "language" studyset (27 studies, 39 images, 263
+        # voxel bags, aggressive_mask=False) peaked at 3.06 GiB against a 30 GiB
+        # limit and finished in 227s on four vCPU. The inputs that sound
+        # expensive are not -- the masked array every map is held in is 36 MB.
+        return _is_fwe(specification)
+
+    # Coordinate-based runs escalate only for the montecarlo null, which is
+    # where their cost is.
+    if not _is_fwe(specification):
+        return False
+    method = _corrector_method(specification)
+    return method is not None and method.lower() == "montecarlo"
 
 
 def _select_task_size(
@@ -118,7 +128,7 @@ def _select_task_size(
                 artifact_prefix,
                 "workflow.task_size_selected",
                 task_size="large",
-                reason="ibma" if spec_type == "ibma" else "montecarlo_fwe",
+                reason="ibma_fwe" if spec_type == "ibma" else "montecarlo_fwe",
             )
             return "large"
     except Exception as exc:  # noqa: broad-except
