@@ -1,14 +1,19 @@
 import compose_runner.sentry
 import gzip
+import logging
 import hashlib
 import json
 import io
 import pickle
+from copy import deepcopy
 from datetime import date, datetime
 from importlib import import_module
+from inspect import signature
 from pathlib import Path
 from uuid import UUID
 
+import numpy as np
+import pandas as pd
 import requests
 import neurosynth_compose_sdk
 import neurostore_sdk
@@ -19,14 +24,59 @@ from neurostore_sdk.exceptions import ApiException as StoreApiException
 from neurosynth_compose_sdk.models import ResultInit
 
 from nimare.correct import FDRCorrector
-from nimare.workflows import CBMAWorkflow, PairwiseCBMAWorkflow
+from nimare.workflows import CBMAWorkflow, IBMAWorkflow, PairwiseCBMAWorkflow
 from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
-from nimare.nimads import Studyset, Annotation
+from nimare.meta.ibma import IBMAEstimator
+from nimare.nimads import Studyset
 from nimare.meta.cbma import ALE, ALESubtraction, SCALE
+
+from compose_runner import coverage
+from compose_runner.images import download_studyset_images
+from compose_runner.metadata import apply_sample_sizes
+
+LGR = logging.getLogger(__name__)
 
 
 def gen_database_url(branch, database):
     return f"https://github.com/neurostuff/neurostore_database/raw/{branch}/{database}.json.gz"
+
+
+def _annotation_column(studyset, column):
+    """Read one annotation column off a studyset.
+
+    A studyset carries its annotations itself, as ``annotations_df``: one row per
+    analysis, keyed by the full ``study-analysis`` id, with a column per note
+    key. That id is what ``slice`` wants, and it is unique, which a bare analysis
+    id is not -- NIMADS does not require analysis ids to be distinct across
+    studies.
+
+    Returns
+    -------
+    ids : :obj:`pandas.Series`
+        Full analysis ids, one per analysis in the studyset.
+    values : :obj:`pandas.Series`
+        The column's values, aligned to ``ids``. Null wherever no note recorded
+        one, including when the column is absent altogether. The frame has a row
+        per analysis, so it cannot distinguish an analysis with no note from one
+        whose note is null -- a distinction compose's annotations do not draw,
+        since they carry a note for every analysis in their studyset.
+    """
+    frame = studyset.annotations_df
+    ids = frame["id"].astype(str)
+    if column not in frame.columns:
+        return ids, pd.Series(None, index=frame.index, dtype=object)
+    return ids, frame[column]
+
+
+def _truthy(values):
+    """Which of an annotation column's values Python would call true.
+
+    A note column arrives as float 1.0/0.0 where its values are numbers --
+    booleans included, since consumers do arithmetic on annotation weights --
+    and as objects otherwise, so the test has to survive both. Nulls are filled
+    first: a missing note is false, but ``NaN`` on its own is true.
+    """
+    return values.fillna(False).astype(bool)
 
 
 _ENVIRONMENT_URLS = {
@@ -110,6 +160,11 @@ class Runner:
         self.second_studyset = None
         self.estimator = None
         self.corrector = None
+        self.n_cores = None
+        self.staged_studyset = None
+        # Which maps never made it into an image-based meta-analysis, and why.
+        self.dropped_maps = {}
+        self.coverage_report = None
 
         # initialize api-keys
         self.nsc_key = nsc_key  # neurosynth compose key to upload to neurosynth compose
@@ -120,6 +175,11 @@ class Runner:
             self.result_dir = Path.cwd() / "results"
         else:
             self.result_dir = Path(result_dir)
+
+        # Where image-based meta-analyses stage their maps. Kept alongside the
+        # results so it doubles as a cache across reruns, and so NiMARE has
+        # somewhere writable for any maps it derives.
+        self.image_dir = self.result_dir / "images"
 
         # whether the inputs were cached from neurostore
         self.cached = True
@@ -469,7 +529,7 @@ class Runner:
         # run key for running this particular meta-analysis
         self.nsc_key = meta_analysis.get("run_key")
 
-    def apply_filter(self, studyset, annotation):
+    def apply_filter(self, studyset, combine=True):
         """
         Apply filter to studyset.
             Options:
@@ -479,6 +539,11 @@ class Runner:
                   can be single or multiple conditions
                 - database_studyset: use a reference studyset
                   only useful for multiple conditions
+
+        Set ``combine=False`` to keep each analysis separate, as IBMA needs:
+        merging concatenates a study's images into one analysis, and converting
+        to a Dataset keeps only one map per type, so the extra contrasts are
+        lost along with the study grouping the dependence correction needs.
         """
         column = self.cached_specification["filter"]
         column_type = self.cached_annotation["note_keys"][f"{column}"]
@@ -497,22 +562,19 @@ class Runner:
             )
 
         # get analysis ids for the first studyset
+        analysis_id, note_value = _annotation_column(studyset, column)
         if column_type == "boolean":
-            analysis_ids = [
-                n.analysis.id for n in annotation.notes if n.note.get(f"{column}")
-            ]
+            included = _truthy(note_value)
+            analysis_ids = list(analysis_id[included])
 
         elif column_type == "string":
-            analysis_ids = [
-                n.analysis.id
-                for n in annotation.notes
-                if n.note.get(f"{column}", "") == weight_conditions[1]
-            ]
+            analysis_ids = list(analysis_id[note_value == weight_conditions[1]])
         else:
             raise ValueError(f"Column type {column_type} not supported.")
 
         first_studyset = studyset.slice(analyses=analysis_ids)
-        first_studyset = first_studyset.combine_analyses()
+        if combine:
+            first_studyset = first_studyset.combine_analyses()
 
         # if there is only one condition, return the first studyset
         if len(conditions) <= 1 and not database_studyset:
@@ -523,19 +585,14 @@ class Runner:
 
         elif len(conditions) == 2 and not database_studyset:
             if column_type == "boolean":
-                second_analysis_ids = [
-                    n.analysis.id
-                    for n in annotation.notes
-                    if not n.note.get(f"{column}")
-                ]
+                second_analysis_ids = list(analysis_id[~included])
             else:
-                second_analysis_ids = [
-                    n.analysis.id
-                    for n in annotation.notes
-                    if n.note.get(f"{column}") == weight_conditions[-1]
-                ]
+                second_analysis_ids = list(
+                    analysis_id[note_value == weight_conditions[-1]]
+                )
             second_studyset = studyset.slice(analyses=second_analysis_ids)
-            second_studyset = second_studyset.combine_analyses()
+            if combine:
+                second_studyset = second_studyset.combine_analyses()
 
             return first_studyset, second_studyset
 
@@ -577,19 +634,167 @@ class Runner:
             )
             del reference_studyset_dict
 
-            second_studyset = reference_studyset.combine_analyses()
+            second_studyset = (
+                reference_studyset.combine_analyses() if combine else reference_studyset
+            )
 
             return first_studyset, second_studyset
 
+    def _is_image_based(self):
+        """Whether the specification asks for an image-based meta-analysis."""
+        spec_type = str((self.cached_specification or {}).get("type") or "").strip()
+        return spec_type.lower() == "ibma"
+
+    def prepare_images(self):
+        """Return a studyset whose maps are on disk, with sample sizes filled in.
+
+        NiMARE hands image paths to nibabel, which cannot read over HTTP, so the
+        maps have to be local before the studyset becomes a Dataset. Staged on a
+        copy, because ``cached_studyset`` is uploaded as the result's studyset
+        snapshot and must keep the locations and maps Neurostore served.
+        """
+        self.image_dir.mkdir(parents=True, exist_ok=True)
+        staged, self.dropped_maps = download_studyset_images(
+            deepcopy(self.cached_studyset), self.image_dir
+        )
+        self.staged_studyset = apply_sample_sizes(staged, self.cached_annotation)
+        return self.staged_studyset
+
     def process_bundle(self, n_cores=None):
-        studyset = Studyset(self.cached_studyset, target=self._TARGET_SPACE)
-        annotation = Annotation(self.cached_annotation, studyset)
-        first_studyset, second_studyset = self.apply_filter(studyset, annotation)
+        self.n_cores = n_cores
+        image_based = self._is_image_based()
+
+        # Before the images are fetched, so a specification NiMARE rejects costs
+        # nothing rather than a studyset's worth of downloads.
         estimator, corrector = self.load_specification(n_cores=n_cores)
+
+        studyset_dict = self.prepare_images() if image_based else self.cached_studyset
+        # The annotation is attached to the studyset rather than wrapped in an
+        # object of its own: it is the studyset that owns the notes, and reading
+        # them back gives the full analysis ids that ``slice`` selects on.
+        studyset = Studyset(
+            studyset_dict,
+            target=self._TARGET_SPACE,
+            annotations=[self.cached_annotation] if self.cached_annotation else None,
+        )
+        first_studyset, second_studyset = self.apply_filter(
+            studyset, combine=not image_based
+        )
+
+        if image_based:
+            # ImageTransformer writes maps it derives into the base path.
+            first_studyset = first_studyset.update_path(str(self.image_dir))
+
         self.first_studyset = first_studyset
         self.second_studyset = second_studyset
         self.estimator = estimator
         self.corrector = corrector
+
+    def _empty_input_maps(self):
+        """Which input maps carry no usable value at all.
+
+        NiMARE counts a voxel as valid only where it is finite *and* non-zero, so
+        an empty upload has no valid voxel anywhere. Under ``aggressive_mask``
+        the mask is the intersection across inputs, so one such map empties it.
+        """
+        inputs = getattr(self.estimator, "inputs_", None) or {}
+        ids = [str(image_id) for image_id in inputs.get("id", [])]
+
+        empty = set()
+        for name, (kind, _) in (self.estimator._required_inputs or {}).items():
+            if kind != "image" or name not in inputs:
+                continue
+            values = np.asarray(inputs[name], dtype=float)
+            valid = np.isfinite(values) & (values != 0)
+            empty.update(i for i in range(valid.shape[0]) if not valid[i].any())
+
+        return [ids[i] if i < len(ids) else f"image {i}" for i in sorted(empty)]
+
+    def _check_result_is_not_empty(self):
+        """Refuse a result that has no value anywhere.
+
+        An image-based meta-analysis can finish and write every map having
+        computed nothing: the run looks successful and the maps that would be
+        uploaded are entirely NaN.
+        """
+        maps = (self.meta_results.maps or {}) if self.meta_results else {}
+        finite = {
+            name: int(np.isfinite(np.asarray(values, dtype=float)).sum())
+            for name, values in maps.items()
+            if values is not None and not name.startswith("label_")
+        }
+        if not finite or any(finite.values()):
+            return
+
+        message = [
+            "The meta-analysis produced no value at any voxel: every map is "
+            "entirely NaN."
+        ]
+        empty = self._empty_input_maps()
+        aggressive = getattr(self.estimator, "aggressive_mask", False)
+        if empty:
+            listed = ", ".join(empty[:5]) + (
+                f", and {len(empty) - 5} more" if len(empty) > 5 else ""
+            )
+            message.append(
+                f"{len(empty)} input map(s) have no finite non-zero voxel at all "
+                f"and so contribute nothing; exclude them: {listed}."
+            )
+            if aggressive:
+                message.append(
+                    "Under aggressive_mask=True one such map empties the mask on "
+                    "its own, however well the rest overlap."
+                )
+        elif aggressive:
+            message.append(
+                "With aggressive_mask=True a voxel must be valid in all "
+                f"{len(self.estimator.inputs_.get('id', []))} input maps, and "
+                "these do not overlap that completely. Set aggressive_mask=False, "
+                "which analyses each group of voxels sharing a validity pattern "
+                "and is NiMARE's default."
+            )
+        raise ValueError(" ".join(message))
+
+    def _describe_coverage(self, report):
+        """Log and persist the account of what the meta-analysis used."""
+        self.coverage_report = report
+        LGR.info(
+            "Image coverage for %s:\n%s",
+            type(self.estimator).__name__,
+            report.summary(),
+        )
+        self.result_dir.mkdir(parents=True, exist_ok=True)
+        (self.result_dir / "ibma_coverage.tsv").write_text(report.to_tsv())
+
+        if report.excluded:
+            LGR.warning(
+                "%d of %d analyses are not in this meta-analysis. See %s.",
+                len(report.excluded),
+                len(report.analyses),
+                self.result_dir / "ibma_coverage.tsv",
+            )
+
+    def _fit_image_based(self, workflow):
+        """Fit the workflow, then report what it used and what it discarded.
+
+        When nothing survives there is no fitted estimator to read, so the
+        submitted studyset is described instead and NiMARE's message is kept.
+        """
+        try:
+            self.meta_results = workflow.fit(self.first_studyset)
+        except ValueError as exc:
+            report = coverage.describe_submission(
+                self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
+            )
+            self._describe_coverage(report)
+            raise ValueError(f"{exc}\n\n{report.summary()}") from exc
+
+        self._describe_coverage(
+            coverage.describe_result(
+                self.meta_results, self.first_studyset, dropped_maps=self.dropped_maps
+            )
+        )
+        self._check_result_is_not_empty()
 
     def create_result_object(self):
         entity_payloads = {
@@ -647,6 +852,25 @@ class Runner:
                 output_dir=self.result_dir,
             )
             self.meta_results = workflow.fit(self.first_studyset)
+        elif isinstance(self.estimator, IBMAEstimator):
+            if self.second_studyset is not None:
+                raise ValueError(
+                    "A group comparison was requested, but no image-based estimator "
+                    f"supports one. {type(self.estimator).__name__} takes a single "
+                    "studyset. Choose a single-group selection, or a pairwise "
+                    "coordinate-based estimator."
+                )
+            # Omitted when unset: the workflow passes n_cores straight to
+            # _check_ncores, which cannot handle None.
+            workflow_kwargs = {} if self.n_cores is None else {"n_cores": self.n_cores}
+            workflow = IBMAWorkflow(
+                estimator=self.estimator,
+                corrector=self.corrector,
+                diagnostics="jackknife",
+                output_dir=self.result_dir,
+                **workflow_kwargs,
+            )
+            self._fit_image_based(workflow)
         else:
             raise ValueError(
                 "Estimator "
@@ -656,10 +880,11 @@ class Runner:
         self._persist_meta_results()
 
     def upload_results(self):
+        # Mirror save_maps, which writes no file for a map whose value is None.
         stat_maps = [
             (m + ".nii.gz", (self.result_dir / (m + ".nii.gz")).read_bytes())
-            for m in self.meta_results.maps.keys()
-            if not m.startswith("label_")
+            for m, values in self.meta_results.maps.items()
+            if not m.startswith("label_") and values is not None
         ]
         cluster_tables = [
             (f + ".tsv", (self.result_dir / (f + ".tsv")).read_bytes())
@@ -709,14 +934,22 @@ class Runner:
         est_args = (
             {**spec["estimator"]["args"]} if spec["estimator"].get("args") else {}
         )
-        if n_cores is not None:
-            est_args["n_cores"] = n_cores
-        if est_args.get("n_iters") is not None:
-            est_args["n_iters"] = int(est_args["n_iters"])
-        if est_args.get("**kwargs") is not None:
-            for k, v in est_args["**kwargs"].items():
-                est_args[k] = v
-            del est_args["**kwargs"]
+        if self._is_image_based():
+            if est_args.get("**kwargs") is not None:
+                est_args.update(est_args.pop("**kwargs"))
+            # No image-based estimator takes n_cores; PermutedOLS parallelizes
+            # its permutations under the name n_jobs.
+            if n_cores is not None and "n_jobs" in signature(estimator).parameters:
+                est_args.setdefault("n_jobs", n_cores)
+        else:
+            if n_cores is not None:
+                est_args["n_cores"] = n_cores
+            if est_args.get("n_iters") is not None:
+                est_args["n_iters"] = int(est_args["n_iters"])
+            if est_args.get("**kwargs") is not None:
+                for k, v in est_args["**kwargs"].items():
+                    est_args[k] = v
+                del est_args["**kwargs"]
         estimator_init = estimator(**est_args)
 
         if spec.get("corrector"):

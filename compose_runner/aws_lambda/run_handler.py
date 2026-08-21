@@ -88,6 +88,12 @@ def _select_task_size(
 ) -> str:
     doc = _fetch_meta_analysis(meta_analysis_id, environment)
     if not doc:
+        _log(
+            artifact_prefix,
+            "workflow.task_size_selected",
+            task_size=DEFAULT_TASK_SIZE,
+            reason="specification_unavailable",
+        )
         return DEFAULT_TASK_SIZE
     specification = doc.get("specification")
     try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -268,3 +269,13 @@ def test_results_handler_missing_job_id(monkeypatch):
     assert response["statusCode"] == 400
     assert body["status"] == "FAILED"
     assert "artifact_prefix" in body["error"]
+
+
+def test_task_size_logs_when_the_specification_cannot_be_read(monkeypatch, caplog):
+    monkeypatch.setattr(run_handler, "_fetch_meta_analysis", lambda *args: None)
+
+    with caplog.at_level(logging.INFO):
+        task_size = run_handler._select_task_size("mid", "production", "job")
+
+    assert task_size == "standard"
+    assert "specification_unavailable" in caplog.text
