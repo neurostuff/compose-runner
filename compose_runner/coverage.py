@@ -6,6 +6,13 @@ user selected without saying so. Nothing here repeats that work; the fitted
 estimator already holds the answer in ``inputs_["id"]`` (the analyses that made
 it in) and ``estimator.dataset.images`` (the image table after the transform,
 which compared against the submitted table says what was converted).
+
+``estimator.dataset`` rather than ``estimator.studyset_``, which NiMARE also
+keeps: ``studyset_`` is narrowed to the analyses that satisfied every
+requirement, so an analysis whose map NiMARE *did* convert but which was dropped
+for some other reason -- no sample size, say -- has no row in it, and would be
+reported as one NiMARE could not convert. ``dataset`` is the whole transformed
+studyset, which is the comparison this wants.
 """
 
 import logging

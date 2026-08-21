@@ -15,10 +15,11 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    # IBMA support needs the dependence handling and `groupby` argument that
-    # release as NiMARE 0.21.0. Replace with `nimare>=0.21.0` once it is on
-    # PyPI, which publishing this package requires anyway: PyPI rejects direct
-    # references.
+    # IBMA support needs the dependence handling and `groupby` argument, and the
+    # runner reads a studyset's annotations off the studyset itself, which the
+    # columnar rewrite (NiMARE #1103) introduced. All of it releases as NiMARE
+    # 0.21.0. Replace with `nimare>=0.21.0` once it is on PyPI, which publishing
+    # this package requires anyway: PyPI rejects direct references.
     "nimare @ git+https://github.com/neurostuff/NiMARE@main",
     "click",
     "requests",

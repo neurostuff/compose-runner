@@ -10,7 +10,7 @@ out of real Neurostore studies and real NeuroVault maps and pushes it through
 
 | Package | Version | Why |
 | --- | --- | --- |
-| NiMARE | `main`, pinned in `pyproject.toml` until 0.21.0 ships | `groupby`, IBMA dependence handling, `aggressive_mask=False` by default, `Stouffers` without `normalize_contrast_weights` |
+| NiMARE | `main`, pinned in `pyproject.toml` until 0.21.0 ships | `groupby`, IBMA dependence handling, `aggressive_mask=False` by default, `Stouffers` without `normalize_contrast_weights`, [#1102](https://github.com/neurostuff/NiMARE/pull/1102) for the jackknife, [#1099](https://github.com/neurostuff/NiMARE/pull/1099) for the `logp` maps, and [#1103](https://github.com/neurostuff/NiMARE/pull/1103) for the columnar studyset |
 | PyMARE | 0.0.11rc1 | `Dataset(g=...)`, `encode_groups`, `group_mean`, `estimate_null_correlation`; required by NiMARE 0.21.0 |
 | Neurostore | [PR #1695](https://github.com/neurostuff/neurostore/pull/1695) | the IBMA algorithm config and the `IBMA` specification type |
 
@@ -69,7 +69,8 @@ NiMARE's `z`/`t`/`beta`/`varcope`/`p` and drops the labels NiMARE has no use for
 | `apply_sample_sizes` | Copies a sample size onto each analysis's `metadata["sample_sizes"]`, preferring the annotation note, then analysis metadata, then study metadata. |
 | `apply_filter(combine=False)` | Keeps each analysis separate. `combine_analyses()` is right for CBMA, where the point is pooling foci, but for IBMA it concatenates a study's images into one analysis and the conversion to a Dataset keeps only one map per type, silently discarding every extra contrast — and destroying the study grouping the dependence correction needs. |
 | `load_specification` | Runs before any download, so a specification NiMARE rejects costs nothing. Drops the injected `n_cores`, which no image-based estimator takes, or passes it as `n_jobs` to `PermutedOLS`, the only one that parallelizes its fit. |
-| `run_meta_analysis` | Dispatches to `IBMAWorkflow` with `diagnostics="jackknife"`. Group comparisons are rejected: no image-based estimator is pairwise. |
+| `run_meta_analysis` | Dispatches to `IBMAWorkflow` with `diagnostics="jackknife"`. Group comparisons are rejected: no image-based estimator is pairwise. Needs a NiMARE carrying [#1102](https://github.com/neurostuff/NiMARE/pull/1102) — before it, `Studyset.slice` dropped the maps `ImageTransformer` derived, so every leave-one-out refit lost every converted analysis rather than the one being left out, which made the diagnostic table this runner uploads meaningless. |
+| `upload_results` | Also publishes the `logp` maps [#1099](https://github.com/neurostuff/NiMARE/pull/1099) adds. They matter because the maps are float32: `p` loses precision below 1.18e-38 and reaches exactly 0 at \|z\| >= 14.17, which real studysets approach. `logp` carries the tail past that. |
 | `_fit_image_based` | Fits the workflow, then reports what it used. On the failure NiMARE raises when nothing survives, describes the submitted studyset instead and appends that to the message. |
 | `_describe_coverage` | Logs the account and writes `ibma_coverage.tsv` beside the results. |
 | `_check_result_is_not_empty` | Rejects a result that is NaN at every voxel, naming the input maps that have no finite non-zero value. |
@@ -119,8 +120,8 @@ Functional organisation for verb…   DLD: VG> Rest   false                     
 Partial coverage is not an error — it is the normal case, and the run proceeds.
 Two things do stop it:
 
-* **Nothing usable at all.** NiMARE raises `No images were found for a required
-  input`, which does not say which studies were unusable. There is no fitted
+* **Nothing usable at all.** NiMARE raises `The collection has no data for
+  'z_maps'`, which does not say which studies were unusable. There is no fitted
   estimator to introspect at that point, so the submitted studyset is described
   instead and the account is appended to NiMARE's message.
 * **A result that is empty everywhere.** An image-based meta-analysis can finish
@@ -170,20 +171,23 @@ significance.
 
 ## Changes needed in NiMARE
 
-1. **`Studyset.slice` silently returns nothing for a hyphenated id.** A full id
-   is composed as `<study_id>-<analysis_id>` and split back on the hyphen, so an
-   id containing one never resolves — and `slice` returns an empty studyset
-   rather than raising:
+1. **`Studyset.slice` silently returns nothing for an id it cannot resolve.**
+   [#1103](https://github.com/neurostuff/NiMARE/pull/1103) closed most of this:
+   a full `<study_id>-<analysis_id>` id is now matched whole rather than split
+   back on the hyphen, so `slice(analyses=["mixed-a-b"])` resolves where it used
+   to return nothing. Two pieces are left:
 
    ```python
-   ss.slice(analyses=["ready-a", "mixed-a"])   # -> no analyses
-   ss.slice(analyses=["analysis0"])            # -> works
+   ss.slice(analyses=["a-b"])   # -> no analyses: the short id of "mixed-a-b"
+   ss.slice(analyses=["nope"])  # -> no analyses, no error
    ```
 
-   Real Neurostore ids are hyphen-free base62, so this does not bite production
-   today, but it would cost a great deal the first time an imported id carries a
-   hyphen. Raising on an unresolvable id, or delimiting on something that cannot
-   occur in an id, would close it.
+   The short-id path derives its keys with `rsplit("-", 1)[-1]`, so a hyphenated
+   *analysis* id is unreachable by its short form, and an id matching nothing at
+   either level is still an empty studyset rather than an error. This runner now
+   selects on the full ids `annotations_df` reports, so neither bites it, but
+   raising on an unresolvable id would make the failure visible to whoever hits
+   it next.
 
 2. **`_persist_meta_results` spends far more disk than the results need.** Most
    of a pickled `MetaResult` is `estimator.inputs_`, which for an IBMA holds

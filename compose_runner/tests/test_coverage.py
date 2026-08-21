@@ -128,7 +128,7 @@ def test_nothing_usable_is_described_from_the_submission(write_map):
     """When nothing survives there is no fitted estimator to read."""
     studyset = _studyset(write_map, {"s1": (["T map"], None)})
 
-    with pytest.raises(ValueError, match="No images were found"):
+    with pytest.raises(ValueError, match="has no data for 'z_maps'"):
         _fit_and_describe(studyset, Stouffers(aggressive_mask=True))
 
     report = coverage.describe_submission(studyset, Stouffers())

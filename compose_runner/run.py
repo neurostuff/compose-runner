@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import UUID
 
 import numpy as np
+import pandas as pd
 import requests
 import neurosynth_compose_sdk
 import neurostore_sdk
@@ -26,7 +27,7 @@ from nimare.correct import FDRCorrector
 from nimare.workflows import CBMAWorkflow, IBMAWorkflow, PairwiseCBMAWorkflow
 from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
 from nimare.meta.ibma import IBMAEstimator
-from nimare.nimads import Studyset, Annotation
+from nimare.nimads import Studyset
 from nimare.meta.cbma import ALE, ALESubtraction, SCALE
 
 from compose_runner import coverage
@@ -38,6 +39,44 @@ LGR = logging.getLogger(__name__)
 
 def gen_database_url(branch, database):
     return f"https://github.com/neurostuff/neurostore_database/raw/{branch}/{database}.json.gz"
+
+
+def _annotation_column(studyset, column):
+    """Read one annotation column off a studyset.
+
+    A studyset carries its annotations itself, as ``annotations_df``: one row per
+    analysis, keyed by the full ``study-analysis`` id, with a column per note
+    key. That id is what ``slice`` wants, and it is unique, which a bare analysis
+    id is not -- NIMADS does not require analysis ids to be distinct across
+    studies.
+
+    Returns
+    -------
+    ids : :obj:`pandas.Series`
+        Full analysis ids, one per analysis in the studyset.
+    values : :obj:`pandas.Series`
+        The column's values, aligned to ``ids``. Null wherever no note recorded
+        one, including when the column is absent altogether. The frame has a row
+        per analysis, so it cannot distinguish an analysis with no note from one
+        whose note is null -- a distinction compose's annotations do not draw,
+        since they carry a note for every analysis in their studyset.
+    """
+    frame = studyset.annotations_df
+    ids = frame["id"].astype(str)
+    if column not in frame.columns:
+        return ids, pd.Series(None, index=frame.index, dtype=object)
+    return ids, frame[column]
+
+
+def _truthy(values):
+    """Which of an annotation column's values Python would call true.
+
+    A note column arrives as float 1.0/0.0 where its values are numbers --
+    booleans included, since consumers do arithmetic on annotation weights --
+    and as objects otherwise, so the test has to survive both. Nulls are filled
+    first: a missing note is false, but ``NaN`` on its own is true.
+    """
+    return values.fillna(False).astype(bool)
 
 
 _ENVIRONMENT_URLS = {
@@ -490,7 +529,7 @@ class Runner:
         # run key for running this particular meta-analysis
         self.nsc_key = meta_analysis.get("run_key")
 
-    def apply_filter(self, studyset, annotation, combine=True):
+    def apply_filter(self, studyset, combine=True):
         """
         Apply filter to studyset.
             Options:
@@ -523,17 +562,13 @@ class Runner:
             )
 
         # get analysis ids for the first studyset
+        analysis_id, note_value = _annotation_column(studyset, column)
         if column_type == "boolean":
-            analysis_ids = [
-                n.analysis.id for n in annotation.notes if n.note.get(f"{column}")
-            ]
+            included = _truthy(note_value)
+            analysis_ids = list(analysis_id[included])
 
         elif column_type == "string":
-            analysis_ids = [
-                n.analysis.id
-                for n in annotation.notes
-                if n.note.get(f"{column}", "") == weight_conditions[1]
-            ]
+            analysis_ids = list(analysis_id[note_value == weight_conditions[1]])
         else:
             raise ValueError(f"Column type {column_type} not supported.")
 
@@ -550,17 +585,11 @@ class Runner:
 
         elif len(conditions) == 2 and not database_studyset:
             if column_type == "boolean":
-                second_analysis_ids = [
-                    n.analysis.id
-                    for n in annotation.notes
-                    if not n.note.get(f"{column}")
-                ]
+                second_analysis_ids = list(analysis_id[~included])
             else:
-                second_analysis_ids = [
-                    n.analysis.id
-                    for n in annotation.notes
-                    if n.note.get(f"{column}") == weight_conditions[-1]
-                ]
+                second_analysis_ids = list(
+                    analysis_id[note_value == weight_conditions[-1]]
+                )
             second_studyset = studyset.slice(analyses=second_analysis_ids)
             if combine:
                 second_studyset = second_studyset.combine_analyses()
@@ -640,10 +669,16 @@ class Runner:
         estimator, corrector = self.load_specification(n_cores=n_cores)
 
         studyset_dict = self.prepare_images() if image_based else self.cached_studyset
-        studyset = Studyset(studyset_dict, target=self._TARGET_SPACE)
-        annotation = Annotation(self.cached_annotation, studyset)
+        # The annotation is attached to the studyset rather than wrapped in an
+        # object of its own: it is the studyset that owns the notes, and reading
+        # them back gives the full analysis ids that ``slice`` selects on.
+        studyset = Studyset(
+            studyset_dict,
+            target=self._TARGET_SPACE,
+            annotations=[self.cached_annotation] if self.cached_annotation else None,
+        )
         first_studyset, second_studyset = self.apply_filter(
-            studyset, annotation, combine=not image_based
+            studyset, combine=not image_based
         )
 
         if image_based:

@@ -1,5 +1,6 @@
 """Tests for routing an image-based specification to the right workflow."""
 
+import pandas as pd
 import pytest
 from nimare.meta.ibma import Fishers, Stouffers
 from nimare.nimads import Studyset
@@ -23,14 +24,26 @@ def runner(tmp_path):
 
 
 class FakeStudyset:
-    """Records whether combine_analyses and update_path were called."""
+    """Records whether combine_analyses and update_path were called.
+
+    Carries its own notes, as a studyset does: ``annotations_df`` is one row per
+    analysis, keyed by the full ``study-analysis`` id, and a boolean note key
+    reaches it as a float because annotation values are arithmetic.
+    """
 
     def __init__(self):
         self.combined = False
         self.base_path = None
+        self.sliced = None
+
+    @property
+    def annotations_df(self):
+        return pd.DataFrame({"id": ["s1-a1"], "include": [1.0]})
 
     def slice(self, analyses=None):
-        return FakeStudyset()
+        sliced = FakeStudyset()
+        self.sliced = list(analyses or [])
+        return sliced
 
     def combine_analyses(self):
         self.combined = True
@@ -39,14 +52,6 @@ class FakeStudyset:
     def update_path(self, new_path):
         self.base_path = new_path
         return self
-
-
-class FakeAnnotation:
-    def __init__(self):
-        note = {"include": True}
-        self.notes = [
-            type("Note", (), {"analysis": type("A", (), {"id": "a1"})(), "note": note})()
-        ]
 
 
 class FakeResults:
@@ -103,8 +108,11 @@ def test_is_image_based(runner, spec_type, expected):
 
 @pytest.mark.parametrize("combine", [True, False])
 def test_apply_filter_combines_only_when_asked(runner, combine):
-    first, second = runner.apply_filter(FakeStudyset(), FakeAnnotation(), combine)
+    studyset = FakeStudyset()
 
+    first, second = runner.apply_filter(studyset, combine)
+
+    assert studyset.sliced == ["s1-a1"]
     assert first.combined is combine
     assert second is None
 
@@ -119,7 +127,7 @@ def test_process_bundle_prepares_images_only_for_ibma(
     """IBMA must not merge a study's analyses, and CBMA must not download."""
     captured = {}
 
-    def fake_apply_filter(self, studyset, annotation, combine=True):
+    def fake_apply_filter(self, studyset, combine=True):
         captured["combine"] = combine
         return FakeStudyset(), None
 
@@ -133,7 +141,6 @@ def test_process_bundle_prepares_images_only_for_ibma(
         Runner, "load_specification", lambda self, n_cores=None: (None, None)
     )
     monkeypatch.setattr("compose_runner.run.Studyset", lambda *a, **kw: FakeStudyset())
-    monkeypatch.setattr("compose_runner.run.Annotation", lambda *a, **kw: None)
     runner.cached_specification["type"] = spec_type
 
     runner.process_bundle()
