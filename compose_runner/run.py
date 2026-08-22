@@ -5,6 +5,8 @@ import hashlib
 import json
 import io
 import pickle
+import tarfile
+import tempfile
 from copy import deepcopy
 from datetime import date, datetime
 from importlib import import_module
@@ -27,7 +29,7 @@ from nimare.correct import FDRCorrector
 from nimare.workflows import CBMAWorkflow, IBMAWorkflow, PairwiseCBMAWorkflow
 from nimare.meta.cbma.base import CBMAEstimator, PairwiseCBMAEstimator
 from nimare.meta.ibma import IBMAEstimator
-from nimare.nimads import Studyset
+from nimare.nimads import Studyset, from_parquet
 from nimare.meta.cbma import ALE, ALESubtraction, SCALE
 
 from compose_runner import coverage
@@ -39,6 +41,30 @@ LGR = logging.getLogger(__name__)
 
 def gen_database_url(branch, database):
     return f"https://github.com/neurostuff/neurostore_database/raw/{branch}/{database}.json.gz"
+
+
+def gen_release_url(store_host, version):
+    """URL for one of neurostore's parquet studyset releases."""
+    host = store_host.rstrip("/")
+    return f"{host}/neurostore-studyset-releases/{version}/download"
+
+
+def _extract_studyset_release(archive, destination):
+    """Unpack a studyset release and return the directory holding its tables.
+
+    The archive carries a single directory named for the release, so the
+    ``studyset.json`` manifest sits one level below the root rather than at it.
+    """
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(destination, filter="data")
+
+    manifests = sorted(destination.glob("**/studyset.json"))
+    if not manifests:
+        raise ValueError(
+            f"{archive.name} is not a studyset parquet release: it has no "
+            "studyset.json manifest."
+        )
+    return manifests[0].parent
 
 
 def _annotation_column(studyset, column):
@@ -98,6 +124,13 @@ class Runner:
 
     _TARGET_SPACE = "mni152_2mm"
 
+    # Which reference studysets come from neurostore's studyset release API, as
+    # a tarball of parquet tables, rather than from a static NIMADS dump. Only
+    # neurostore's own: a release carries no record of which database a study
+    # came from, so a neurosynth or neuroquery subset cannot be cut out of one.
+    _RELEASE_REFERENCES = frozenset({"neurostore"})
+    _REFERENCE_RELEASE_VERSION = "nightly"
+
     _ENTITY_SNAPSHOT_ID_KEYS = {
         "studyset": ("snapshot_studyset_id",),
         "annotation": ("snapshot_annotation_id",),
@@ -133,12 +166,17 @@ class Runner:
         self.compose_url = compose_host
 
         ref_branch = "main" if environment == "production" else "staging"
-        ref_dbs = ["neurosynth", "neuroquery", "neurostore"]
+        ref_dbs = ["neurosynth", "neuroquery"]
         if environment != "production":
             ref_dbs.append("neurostore_small")
         self.reference_studysets = {
             db: gen_database_url(ref_branch, db) for db in ref_dbs
         }
+        # Served by this environment's own API, so the comparison group is the
+        # database the studyset was selected from as it stands tonight.
+        self.reference_studysets["neurostore"] = gen_release_url(
+            store_host, self._REFERENCE_RELEASE_VERSION
+        )
 
         self._compose_config = neurosynth_compose_sdk.Configuration(host=compose_host)
         self.compose_api = ComposeApi(
@@ -599,46 +637,94 @@ class Runner:
         elif len(conditions) <= 1 and database_studyset:
             # collect user study IDs cheaply before loading the large reference database
             study_ids = set(studyset.study_ids)
-
-            # Download the gzip file
-            response = requests.get(self.reference_studysets[database_studyset])
-
-            try:
-                response.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                raise requests.exceptions.HTTPError(
-                    f"Could not download reference studyset {database_studyset}."
-                ) from e
-
-            # Wrap the content of the response in a BytesIO object
-            gzip_content = io.BytesIO(response.content)
-
-            # Decompress the gzip content
-            with gzip.GzipFile(fileobj=gzip_content, mode="rb") as gz_file:
-                # Read and decode the JSON data
-                json_data = gz_file.read().decode("utf-8")
-
-                # Load the JSON data into a dictionary
-                reference_studyset_dict = json.loads(json_data)
-
-            # pre-filter at the dict level to exclude user studies before constructing
-            # Studyset, keeping the object small and avoiding expensive materialize calls
-            reference_studyset_dict["studies"] = [
-                s
-                for s in reference_studyset_dict.get("studies", [])
-                if s["id"] not in study_ids
-            ]
-
-            reference_studyset = Studyset(
-                reference_studyset_dict, target=self._TARGET_SPACE
+            reference_studyset = self._load_reference_studyset(
+                database_studyset, study_ids
             )
-            del reference_studyset_dict
 
             second_studyset = (
                 reference_studyset.combine_analyses() if combine else reference_studyset
             )
 
             return first_studyset, second_studyset
+
+    def _load_reference_studyset(self, database_studyset, exclude_study_ids):
+        """The comparison group for a database meta-analysis.
+
+        The user's own studies are excluded from it: they are already the other
+        group, and an analysis cannot be in both.
+        """
+        if database_studyset in self._RELEASE_REFERENCES:
+            return self._load_release_reference(database_studyset, exclude_study_ids)
+        return self._load_dump_reference(database_studyset, exclude_study_ids)
+
+    def _get_reference_studyset(self, database_studyset, **kwargs):
+        """Request a reference studyset, naming it in the error if it is not served."""
+        response = requests.get(self.reference_studysets[database_studyset], **kwargs)
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            response.close()
+            raise requests.exceptions.HTTPError(
+                f"Could not download reference studyset {database_studyset}."
+            ) from e
+
+        return response
+
+    def _load_release_reference(self, database_studyset, exclude_study_ids):
+        """Read a reference studyset from a parquet studyset release.
+
+        Streamed to disk rather than held in memory: the archive is tens of
+        megabytes and has to be unpacked to a directory for NiMARE to read it.
+        """
+        with tempfile.TemporaryDirectory() as workdir:
+            archive = Path(workdir) / "release.tar.gz"
+            with self._get_reference_studyset(
+                database_studyset, stream=True
+            ) as response, archive.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    handle.write(chunk)
+
+            release_dir = _extract_studyset_release(archive, Path(workdir) / "release")
+            # The reference is only ever the comparison group, so nothing reads
+            # its notes: its annotation columns are pure cost here.
+            store = from_parquet(str(release_dir), load_annotations=False)
+
+        # The tables are read eagerly, so the studyset outlives the directory.
+        reference_studyset = Studyset(store, target=self._TARGET_SPACE)
+        # As a list: the ids are matched with ``numpy.isin``, which reads a set
+        # as one opaque object and so quietly excludes nothing.
+        return reference_studyset.exclude_study_ids(list(exclude_study_ids))
+
+    def _load_dump_reference(self, database_studyset, exclude_study_ids):
+        """Read a reference studyset from a gzipped NIMADS dump."""
+        response = self._get_reference_studyset(database_studyset)
+
+        # Wrap the content of the response in a BytesIO object
+        gzip_content = io.BytesIO(response.content)
+
+        # Decompress the gzip content
+        with gzip.GzipFile(fileobj=gzip_content, mode="rb") as gz_file:
+            # Read and decode the JSON data
+            json_data = gz_file.read().decode("utf-8")
+
+            # Load the JSON data into a dictionary
+            reference_studyset_dict = json.loads(json_data)
+
+        # pre-filter at the dict level to exclude user studies before constructing
+        # Studyset, keeping the object small and avoiding expensive materialize calls
+        reference_studyset_dict["studies"] = [
+            s
+            for s in reference_studyset_dict.get("studies", [])
+            if s["id"] not in exclude_study_ids
+        ]
+
+        reference_studyset = Studyset(
+            reference_studyset_dict, target=self._TARGET_SPACE
+        )
+        del reference_studyset_dict
+
+        return reference_studyset
 
     def _is_image_based(self):
         """Whether the specification asks for an image-based meta-analysis."""
