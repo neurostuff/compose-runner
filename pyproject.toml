@@ -20,7 +20,7 @@ dependencies = [
     # columnar rewrite (NiMARE #1103) introduced. All of it releases as NiMARE
     # 0.21.0. Replace with `nimare>=0.21.0` once it is on PyPI, which publishing
     # this package requires anyway: PyPI rejects direct references.
-    "nimare==0.21.0rc2",
+    "nimare==0.21.0rc3",
     "click",
     "requests",
     "sentry-sdk",
