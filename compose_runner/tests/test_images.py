@@ -1,5 +1,10 @@
 """Tests for staging a studyset's images locally."""
 
+import gzip
+import io
+
+import nibabel as nib
+import numpy as np
 import pytest
 
 from compose_runner.images import (
@@ -9,8 +14,24 @@ from compose_runner.images import (
     select_image_url,
 )
 
-# Canned responses have to look like a NIfTI, or they are rejected.
-GZIPPED_NIFTI = b"\x1f\x8b" + b"nifti-bytes"
+
+def _gzipped_nifti():
+    """A real, tiny NIfTI: staging opens what it downloaded and drops what it cannot.
+
+    A map with no finite non-zero voxel is dropped, so the canned one carries a
+    value.
+    """
+    data = np.zeros((2, 2, 2), dtype=np.float32)
+    data[0, 0, 0] = 1.0
+    image = nib.Nifti1Image(data, np.eye(4))
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as handle:
+        handle.write(image.to_bytes())
+    return buffer.getvalue()
+
+
+# Canned responses have to be a NIfTI, or they are rejected.
+GZIPPED_NIFTI = _gzipped_nifti()
 
 
 class FakeResponse:

@@ -262,6 +262,31 @@ def describe_result(results, studyset, dropped_maps=None):
     )
 
 
+def describe_estimator(studyset, estimator, dropped_maps=None):
+    """Report coverage from an estimator that collected its inputs but failed.
+
+    Between ``describe_result``, which needs a ``MetaResult``, and
+    ``describe_submission``, which assumes nothing was transformed: a fit that
+    raises after ``_preprocess_input`` has both answers on the estimator
+    already, and describing it as an untransformed submission would report
+    every converted analysis as one NiMARE could not convert.
+    """
+    fitted_ids = {
+        str(image_id)
+        for image_id in (getattr(estimator, "inputs_", None) or {}).get("id", [])
+    }
+    transformed = getattr(estimator, "dataset", None)
+
+    return _build(
+        studyset,
+        estimator,
+        before=_held_types(studyset.images),
+        after=_held_types(getattr(transformed, "images", None)),
+        fitted_ids=fitted_ids,
+        dropped_maps=dropped_maps,
+    )
+
+
 def describe_submission(studyset, estimator, dropped_maps=None):
     """Report what was submitted, for when the fit never got far enough to ask.
 

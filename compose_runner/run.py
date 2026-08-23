@@ -209,10 +209,14 @@ class Runner:
         self.nv_key = nv_key  # neurovault key to upload to neurovault
 
         # result directory
+        # Resolved: the studyset records where its downloaded maps are, and
+        # NiMARE treats a relative reference as relative to the studyset's base
+        # path -- so a relative result_dir has the base path prepended to a path
+        # that already contains it, and every map goes missing.
         if result_dir is None:
             self.result_dir = Path.cwd() / "results"
         else:
-            self.result_dir = Path(result_dir)
+            self.result_dir = Path(result_dir).expanduser().resolve()
 
         # Where image-based meta-analyses stage their maps. Kept alongside the
         # results so it doubles as a cache across reruns, and so NiMARE has
@@ -584,7 +588,14 @@ class Runner:
         lost along with the study grouping the dependence correction needs.
         """
         column = self.cached_specification["filter"]
-        column_type = self.cached_annotation["note_keys"][f"{column}"]
+        note_keys = (self.cached_annotation or {}).get("note_keys") or {}
+        if column not in note_keys:
+            # Otherwise a bare KeyError, which names the column but nothing else.
+            raise ValueError(
+                f"The specification selects analyses by {column!r}, which this "
+                f"annotation does not record. It has: {sorted(note_keys)}."
+            )
+        column_type = note_keys[column]
         conditions = self.cached_specification.get("conditions", [])
         database_studyset = self.cached_specification.get("database_studyset")
         weights = self.cached_specification.get("weights", [])
@@ -609,6 +620,19 @@ class Runner:
             analysis_ids = list(analysis_id[note_value == weight_conditions[1]])
         else:
             raise ValueError(f"Column type {column_type} not supported.")
+
+        if not analysis_ids:
+            # NiMARE would report this as a missing image type, which sends
+            # whoever reads it looking at the maps rather than at the selection.
+            raise ValueError(
+                f"No analysis is selected: none of the {len(analysis_id)} "
+                f"analyses in the studyset has a {column!r} note that "
+                + (
+                    "is true."
+                    if column_type == "boolean"
+                    else f"equals {weight_conditions[1]!r}."
+                )
+            )
 
         first_studyset = studyset.slice(analyses=analysis_ids)
         if combine:
@@ -746,6 +770,24 @@ class Runner:
         self.staged_studyset = apply_sample_sizes(staged, self.cached_annotation)
         return self.staged_studyset
 
+    def _reject_image_based_comparison(self):
+        """Refuse an image-based group comparison while it is still cheap.
+
+        ``run_meta_analysis`` catches this too, but only after the maps are
+        staged and, for a database comparison, after the whole reference
+        studyset has been downloaded -- tens of megabytes to reach a conclusion
+        the specification already carried.
+        """
+        spec = self.cached_specification or {}
+        if len(spec.get("conditions") or []) <= 1 and not spec.get("database_studyset"):
+            return
+        raise ValueError(
+            "A group comparison was requested, but no image-based estimator "
+            f"supports one. {spec['estimator']['type']} takes a single studyset. "
+            "Choose a single-group selection, or a pairwise coordinate-based "
+            "estimator."
+        )
+
     def process_bundle(self, n_cores=None):
         self.n_cores = n_cores
         image_based = self._is_image_based()
@@ -754,7 +796,19 @@ class Runner:
         # nothing rather than a studyset's worth of downloads.
         estimator, corrector = self.load_specification(n_cores=n_cores)
 
-        studyset_dict = self.prepare_images() if image_based else self.cached_studyset
+        if image_based:
+            self._reject_image_based_comparison()
+            studyset_dict = self.prepare_images()
+        else:
+            # A coordinate-based kernel needs a sample size per experiment as
+            # much as an image-based estimator does -- ALE sizes its Gaussian
+            # from it, and one experiment without one fails the whole run --
+            # and compose records it on the annotation note rather than on the
+            # analysis. Copied, since cached_studyset is uploaded as the
+            # result's snapshot and must keep what Neurostore served.
+            studyset_dict = apply_sample_sizes(
+                deepcopy(self.cached_studyset), self.cached_annotation
+            )
         # The annotation is attached to the studyset rather than wrapped in an
         # object of its own: it is the studyset that owns the notes, and reading
         # them back gives the full analysis ids that ``slice`` selects on.
@@ -812,9 +866,11 @@ class Runner:
         if not finite or any(finite.values()):
             return
 
+        fitted = list((getattr(self.estimator, "inputs_", None) or {}).get("id", []))
         message = [
             "The meta-analysis produced no value at any voxel: every map is "
-            "entirely NaN."
+            f"entirely NaN. {len(fitted)} analysis/analyses reached the "
+            f"estimator, of {len(self.first_studyset.analyses)} submitted."
         ]
         empty = self._empty_input_maps()
         aggressive = getattr(self.estimator, "aggressive_mask", False)
@@ -869,9 +925,18 @@ class Runner:
         try:
             self.meta_results = workflow.fit(self.first_studyset)
         except ValueError as exc:
-            report = coverage.describe_submission(
-                self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
-            )
+            # Which report is right depends on how far the fit got. Once the
+            # estimator has inputs, the transform ran and describing the
+            # submission instead would report every converted analysis as one
+            # NiMARE could not convert.
+            if (getattr(self.estimator, "inputs_", None) or {}).get("id") is not None:
+                report = coverage.describe_estimator(
+                    self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
+                )
+            else:
+                report = coverage.describe_submission(
+                    self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
+                )
             self._describe_coverage(report)
             raise ValueError(f"{exc}\n\n{report.summary()}") from exc
 

@@ -403,26 +403,45 @@ def test_nothing_usable_fails_with_the_account_attached(tmp_path):
     assert (runner.result_dir / "ibma_coverage.tsv").is_file()
 
 
-@pytest.mark.parametrize("fill", [0.0, np.nan], ids=["all-zero", "all-nan"])
-def test_an_all_nan_result_is_rejected(tmp_path, fill):
+def test_an_unreadable_upload_is_dropped_rather_than_failing_the_run(tmp_path):
+    """A file that is not a NIfTI costs its own analysis, not the meta-analysis.
+
+    It passes the magic-byte check that guards the download, so nothing notices
+    until nibabel opens it from inside the fit, where it is neither caught nor
+    attributed to the analysis it came from. A map that parses but holds no
+    finite non-zero voxel is NiMARE's to drop, and is not covered here.
+    """
+    runner = _prepared_runner(tmp_path, "Stouffers")
+    corrupt = tmp_path / "corrupt.nii.gz"
+    corrupt.write_bytes(b"\x1f\x8b" + b"not actually a nifti" * 8)
+    analysis = runner.cached_studyset["studies"][0]["analyses"][0]
+    analysis["images"][0]["filename"] = str(corrupt)
+    analysis["images"][0]["url"] = str(corrupt)
+
+    runner.process_bundle()
+    runner.run_meta_analysis()
+
+    assert "could not be read as a NIfTI" in " ".join(
+        runner.dropped_maps[analysis["id"]]
+    )
+    assert analysis["id"] in {a.analysis_id for a in runner.coverage_report.excluded}
+
+
+def test_an_all_nan_result_is_rejected(tmp_path):
     """A run that computes nothing must not pass as a success.
 
-    Both fills are degenerate to NiMARE, which counts a voxel as valid only
-    where it is finite *and* non-zero, so under aggressive_mask=True either one
-    empties the mask on its own and every output map comes out NaN. The message
-    has to name the map, since excluding an empty upload is the fix rather than
-    a more liberal mask.
+    Every analysis here comes from one study, so the studyset clears NiMARE's
+    floor on the analysis count but holds a single dependence group. Every bag
+    of voxels is then skipped for want of independent replication, the fit
+    succeeds, and every output map is NaN.
     """
-    runner = _prepared_runner(
-        tmp_path, "Stouffers", estimator_args={"aggressive_mask": True}
-    )
+    runner = _prepared_runner(tmp_path, "Stouffers")
     studyset = runner.cached_studyset
-    degenerate = tmp_path / "degenerate.nii.gz"
-    nib.save(
-        nib.Nifti1Image(np.full(SHAPE, fill, dtype=np.float32), AFFINE), str(degenerate)
-    )
-    studyset["studies"][0]["analyses"][0]["images"][0]["filename"] = str(degenerate)
-    studyset["studies"][0]["analyses"][0]["images"][0]["url"] = str(degenerate)
+    analyses = [a for study in studyset["studies"] for a in study["analyses"]]
+    studyset["studies"] = [
+        {"id": "study0", "name": "study 0", "metadata": {}, "analyses": analyses}
+    ]
+    runner.cached_annotation = _make_annotation(studyset)
 
     runner.process_bundle()
     with pytest.raises(ValueError) as excinfo:
@@ -430,4 +449,4 @@ def test_an_all_nan_result_is_rejected(tmp_path, fill):
 
     message = str(excinfo.value)
     assert "no value at any voxel" in message
-    assert "no finite non-zero voxel" in message
+    assert f"{len(analyses)} analysis/analyses reached the estimator" in message

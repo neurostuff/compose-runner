@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
+import nibabel as nib
 import requests
 
 LGR = logging.getLogger(__name__)
@@ -238,7 +239,12 @@ def download_studyset_images(
     def _fetch(job):
         _, image, _, source_url = job
         destination = image_dir / _local_name(image, source_url)
-        return _download(source_url, destination, session=session, timeout=timeout)
+        # Absolute: NiMARE resolves a relative image reference against the
+        # studyset's base path, which is this same directory, so a relative path
+        # would be joined onto itself.
+        return _download(
+            source_url, destination, session=session, timeout=timeout
+        ).resolve()
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for job, result in zip(jobs, pool.map(_safe(_fetch), jobs)):
@@ -246,6 +252,15 @@ def download_studyset_images(
                 resolved[id(job[1])] = result
 
     attempted = {id(image) for _, image, _, _ in jobs}
+    # A file that does not parse as a NIfTI would otherwise reach nibabel from
+    # inside the fit, where nothing attributes it to the analysis it came from.
+    unusable = {
+        key: reason
+        for key, reason in (
+            (key, _unusable_reason(path)) for key, path in resolved.items()
+        )
+        if reason is not None
+    }
     for study in studyset_dict.get("studies") or []:
         for analysis in study.get("analyses") or []:
             kept = []
@@ -254,6 +269,9 @@ def download_studyset_images(
                 if local_path is None:
                     if id(image) in attempted:
                         _record(analysis, image, "could not be downloaded")
+                    continue
+                if id(image) in unusable:
+                    _record(analysis, image, unusable[id(image)])
                     continue
                 image = dict(image)
                 image["filename"] = str(local_path)
@@ -273,6 +291,33 @@ def download_studyset_images(
         )
 
     return studyset_dict, {k: tuple(v) for k, v in dropped.items()}
+
+
+#: Verdicts from :func:`_unusable_reason`, which reads a whole volume and is
+#: asked the same question once per analysis the map is reached from.
+_UNUSABLE_CACHE = {}
+
+
+def _unusable_reason(path):
+    """Why a downloaded map cannot be used, or None if it can.
+
+    Only unreadable files. A map that parses but holds no finite non-zero voxel
+    is NiMARE's to drop, and it does; a file that is not a NIfTI at all reaches
+    nibabel mid-fit instead, which is neither caught nor attributed there.
+    """
+    key = str(path)
+    if key in _UNUSABLE_CACHE:
+        return _UNUSABLE_CACHE[key]
+
+    try:
+        nib.load(key)
+    except Exception as exc:  # noqa: BLE001 - an unreadable map is just dropped
+        reason = f"could not be read as a NIfTI ({exc.__class__.__name__})"
+    else:
+        reason = None
+
+    _UNUSABLE_CACHE[key] = reason
+    return reason
 
 
 def _safe(func):

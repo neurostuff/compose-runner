@@ -95,15 +95,20 @@ def test_an_absent_note_is_not_selected():
 
 
 def test_a_filter_column_no_note_carries_selects_nothing():
+    """An un-noted column must select nothing -- and say so rather than proceed.
+
+    Selecting nothing is the safe half: a null note is truthy, so a bare test
+    would take every analysis the column says nothing about. Saying so is the
+    other half, since NiMARE reports an empty selection as a missing image type.
+    """
     runner, studyset = _runner(
         {"filter": "missing", "conditions": [True], "weights": [1]},
         {"missing": "boolean"},
         [_note("a1", True)],
     )
 
-    first, _ = runner.apply_filter(studyset, combine=False)
-
-    assert list(first.ids) == []
+    with pytest.raises(ValueError, match="No analysis is selected.*'missing'"):
+        runner.apply_filter(studyset, combine=False)
 
 
 def test_boolean_column_splits_into_two_groups():
