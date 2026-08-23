@@ -14,7 +14,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import nibabel as nib
-import numpy as np
 import requests
 
 LGR = logging.getLogger(__name__)
@@ -270,12 +269,8 @@ def download_studyset_images(
                 resolved[id(job[1])] = result
 
     attempted = {id(image) for _, image, _, _ in jobs}
-    # NiMARE counts a voxel as valid only where it is finite and non-zero, so a
-    # map with no such voxel contributes nothing anywhere. Under
-    # aggressive_mask=True it empties the intersection mask on its own and every
-    # output map comes back NaN, reported only as a count of masked-out voxels.
-    # Under the liberal default it joins no bag, but still occupies a row in the
-    # estimator's inputs, so it is counted as an analysis that contributed.
+    # A file that does not parse as a NIfTI would otherwise reach nibabel from
+    # inside the fit, where nothing attributes it to the analysis it came from.
     unusable = {
         key: reason
         for key, reason in (
@@ -321,21 +316,22 @@ _UNUSABLE_CACHE = {}
 
 
 def _unusable_reason(path):
-    """Why a downloaded map cannot be used, or None if it can."""
+    """Why a downloaded map cannot be used, or None if it can.
+
+    Only unreadable files. A map that parses but holds no finite non-zero voxel
+    is NiMARE's to drop, and it does; a file that is not a NIfTI at all reaches
+    nibabel mid-fit instead, which is neither caught nor attributed there.
+    """
     key = str(path)
     if key in _UNUSABLE_CACHE:
         return _UNUSABLE_CACHE[key]
 
     try:
-        values = np.asarray(nib.load(key).dataobj, dtype=float)
+        nib.load(key)
     except Exception as exc:  # noqa: BLE001 - an unreadable map is just dropped
         reason = f"could not be read as a NIfTI ({exc.__class__.__name__})"
     else:
-        reason = (
-            None
-            if (np.isfinite(values) & (values != 0)).any()
-            else "has no finite non-zero voxel"
-        )
+        reason = None
 
     _UNUSABLE_CACHE[key] = reason
     return reason

@@ -5,7 +5,6 @@ import hashlib
 import json
 import io
 import pickle
-import re
 import tarfile
 import tempfile
 from copy import deepcopy
@@ -118,11 +117,6 @@ _ENVIRONMENT_URLS = {
     "local": ("http://localhost:81/api", "http://localhost:80/api"),
     "production": ("https://compose.neurosynth.org/api", "https://neurostore.org/api"),
 }
-
-
-# PyMARE names the dependence group whose members cancel, but by the integer
-# code NiMARE assigned it, which means nothing to whoever chose the studies.
-_CANCELLED_GROUP = re.compile(r"Group (\S+) pools \d+ estimates")
 
 
 class Runner:
@@ -878,11 +872,6 @@ class Runner:
             f"entirely NaN. {len(fitted)} analysis/analyses reached the "
             f"estimator, of {len(self.first_studyset.analyses)} submitted."
         ]
-        if len(fitted) < 2:
-            message.append(
-                "A meta-analysis needs at least two analyses to pool; see the "
-                "coverage report for why the rest were left out."
-            )
         empty = self._empty_input_maps()
         aggressive = getattr(self.estimator, "aggressive_mask", False)
         if empty:
@@ -927,109 +916,6 @@ class Runner:
                 self.result_dir / "ibma_coverage.tsv",
             )
 
-    def _analysis_names(self):
-        """Full analysis id to (study name, analysis name), for naming failures."""
-        names = {}
-        for study in self.first_studyset.studies:
-            for analysis in study.analyses:
-                names[f"{study.id}-{analysis.id}"] = (
-                    getattr(study, "name", None) or study.id,
-                    getattr(analysis, "name", None) or analysis.id,
-                )
-        return names
-
-    def _describe_dependence_group(self, label):
-        """Say which analyses a dependence group holds, and why they cancelled.
-
-        NiMARE groups an estimator's images by the study that contributed them,
-        so a group that cancels is one paper whose maps carry no joint signal --
-        most often a pair of mirrored contrasts (A>B and B>A), which are exact
-        negatives and average to zero.
-        """
-        inputs = getattr(self.estimator, "inputs_", None) or {}
-        codes = np.asarray(inputs.get("contrast_names", []))
-        ids = [str(image_id) for image_id in inputs.get("id", [])]
-        if codes.size == 0 or codes.size != len(ids):
-            return None
-        try:
-            code = int(label)
-        except (TypeError, ValueError):
-            return None
-
-        members = [index for index in range(codes.size) if codes[index] == code]
-        if not members:
-            return None
-
-        names = self._analysis_names()
-        studies = {names.get(ids[i], (ids[i], None))[0] for i in members}
-        labelled = [f"{names.get(ids[i], ('', ids[i]))[1]}" for i in members]
-        lines = [
-            f"That group is {' / '.join(sorted(studies))}, which contributed "
-            f"{len(members)} analyses: {', '.join(labelled)}."
-        ]
-
-        image_name = next(
-            (
-                name
-                for name, (kind, _) in (self.estimator._required_inputs or {}).items()
-                if kind == "image" and name in inputs
-            ),
-            None,
-        )
-        if image_name is not None:
-            maps = np.asarray(inputs[image_name], dtype=float)[members]
-            valid = np.isfinite(maps) & (maps != 0)
-            empty = [labelled[i] for i in range(len(members)) if not valid[i].any()]
-            if empty:
-                lines.append(
-                    f"{', '.join(empty)} has no finite non-zero voxel, so it "
-                    "carries no signal to pool."
-                )
-            else:
-                shared = valid.all(axis=0)
-                if shared.sum() > 1:
-                    correlations = np.corrcoef(maps[:, shared])
-                    off = correlations[~np.eye(len(members), dtype=bool)]
-                    lowest = float(np.nanmin(off)) if off.size else None
-                    if lowest is not None and lowest < -0.99:
-                        first, second = np.unravel_index(
-                            np.nanargmin(
-                                np.where(
-                                    np.eye(len(members), dtype=bool),
-                                    np.nan,
-                                    correlations,
-                                )
-                            ),
-                            correlations.shape,
-                        )
-                        lines.append(
-                            f"{labelled[first]} and {labelled[second]} correlate "
-                            f"{lowest:+.3f}: they are the same contrast in "
-                            "opposite directions, and averaging them cancels."
-                        )
-                    elif lowest is not None:
-                        lines.append(
-                            "Over the voxels they share, those maps correlate "
-                            f"between {lowest:+.3f} and {float(np.nanmax(off)):+.3f}, "
-                            "which sums to no joint variance -- what happens when a "
-                            "paper contributes maps of complementary networks."
-                        )
-
-        lines.append(
-            "Keep one analysis per group, or set the estimator's groupby to "
-            "false, which treats every map as independent and inflates "
-            "significance."
-        )
-        return " ".join(lines)
-
-    def _explain_failure(self, message):
-        """Add what compose knows to a NiMARE failure, when it can."""
-        match = _CANCELLED_GROUP.search(message)
-        if match is None:
-            return message
-        described = self._describe_dependence_group(match.group(1))
-        return message if described is None else f"{message}\n\n{described}"
-
     def _fit_image_based(self, workflow):
         """Fit the workflow, then report what it used and what it discarded.
 
@@ -1052,9 +938,7 @@ class Runner:
                     self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
                 )
             self._describe_coverage(report)
-            raise ValueError(
-                f"{self._explain_failure(str(exc))}\n\n{report.summary()}"
-            ) from exc
+            raise ValueError(f"{exc}\n\n{report.summary()}") from exc
 
         self._describe_coverage(
             coverage.describe_result(
@@ -1225,15 +1109,6 @@ class Runner:
             cor_args = (
                 {**spec["corrector"]["args"]} if spec["corrector"].get("args") else {}
             )
-            # A null is the config's way of saying "not set", but FWECorrector
-            # keeps every extra argument and hands it to the estimator's
-            # correction method, where None is a value: ALE thresholds against
-            # it and PermutedOLS, which has no voxel_thresh at all, rejects it
-            # outright. Dropping them defers to each estimator's own default,
-            # which is what an unset parameter asks for.
-            cor_args = {
-                name: value for name, value in cor_args.items() if value is not None
-            }
             if n_cores is not None and corrector is not FDRCorrector:
                 cor_args["n_cores"] = n_cores
             if cor_args.get("n_iters") is not None and corrector is not FDRCorrector:

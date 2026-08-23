@@ -273,34 +273,3 @@ def test_a_relative_result_dir_is_resolved(tmp_path, monkeypatch):
 
     assert runner.result_dir.is_absolute()
     assert runner.image_dir == tmp_path / "results" / "run1" / "images"
-
-
-@pytest.mark.parametrize(
-    ("spec_type", "estimator_type"),
-    [("IBMA", "PermutedOLS"), ("CBMA", "ALE")],
-)
-def test_an_unset_corrector_argument_is_not_passed_on(
-    runner, spec_type, estimator_type
-):
-    """A null means "not set", but FWECorrector treats every extra as a value.
-
-    It keeps them and hands them to the estimator's correction method, so a
-    ``voxel_thresh`` of null makes ALE threshold against None and PermutedOLS,
-    which has no such parameter, reject the call outright.
-    """
-    runner.cached_specification = {
-        "type": spec_type,
-        "estimator": {"type": estimator_type, "args": {}},
-        "corrector": {
-            "type": "FWECorrector",
-            "args": {"method": "montecarlo", "n_iters": 10, "voxel_thresh": None},
-        },
-        "filter": "include",
-        "conditions": [True],
-        "weights": [1],
-    }
-
-    _, corrector = runner.load_specification()
-
-    assert "voxel_thresh" not in corrector.parameters
-    assert corrector.parameters["n_iters"] == 10
