@@ -1,5 +1,10 @@
 """Tests for staging a studyset's images locally."""
 
+import gzip
+import io
+
+import nibabel as nib
+import numpy as np
 import pytest
 
 from compose_runner.images import (
@@ -7,10 +12,27 @@ from compose_runner.images import (
     download_studyset_images,
     normalize_value_type,
     select_image_url,
+    unusable_type_reason,
 )
 
-# Canned responses have to look like a NIfTI, or they are rejected.
-GZIPPED_NIFTI = b"\x1f\x8b" + b"nifti-bytes"
+
+def _gzipped_nifti():
+    """A real, tiny NIfTI: staging opens what it downloaded and drops what it cannot.
+
+    A map with no finite non-zero voxel is dropped, so the canned one carries a
+    value.
+    """
+    data = np.zeros((2, 2, 2), dtype=np.float32)
+    data[0, 0, 0] = 1.0
+    image = nib.Nifti1Image(data, np.eye(4))
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as handle:
+        handle.write(image.to_bytes())
+    return buffer.getvalue()
+
+
+# Canned responses have to be a NIfTI, or they are rejected.
+GZIPPED_NIFTI = _gzipped_nifti()
 
 
 class FakeResponse:
@@ -67,7 +89,6 @@ def _studyset(images):
         ("univariate-beta map", "beta"),
         ("multivariate-beta map", "beta"),
         ("variance map", "varcope"),
-        ("P map (given null hypothesis)", "p"),
         ("  z MAP  ", "z"),
     ],
 )
@@ -83,6 +104,21 @@ def test_normalize_value_type_known_labels(label, expected):
 def test_normalize_value_type_unusable_labels(label):
     """Maps NiMARE cannot use must not be guessed at."""
     assert normalize_value_type(label) is None
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["P map (given null hypothesis)", "P map", '1-P map ("inverted" probability)'],
+)
+def test_unsigned_maps_are_not_passed_to_nimare(label):
+    """A p map has no sign, and NiMARE's only route from one drops it.
+
+    ``p_to_z`` returns an unsigned z, so an analysis whose only usable map is a
+    p map would contribute an all-positive map to the meta-analysis. The reason
+    has to say that rather than claim NiMARE cannot read the label.
+    """
+    assert normalize_value_type(label) is None
+    assert "no sign" in unusable_type_reason(label)
 
 
 def test_select_image_url_compose_uploaded_shape():

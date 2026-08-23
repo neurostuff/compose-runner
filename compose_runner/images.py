@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
+import nibabel as nib
+import numpy as np
 import requests
 
 LGR = logging.getLogger(__name__)
@@ -31,10 +33,17 @@ MAP_TYPE_TO_IMAGE_TYPE = {
     "variance map": "varcope",
     "variance": "varcope",
     "v": "varcope",
-    "p map (given null hypothesis)": "p",
-    "p map": "p",
-    "p": "p",
 }
+
+# Labels NiMARE could technically read but must not be given. A p map carries no
+# sign, and NiMARE's only route from one is ``p_to_z``, which is documented to
+# return an unsigned z -- so an analysis whose only usable map is a p map joins
+# the meta-analysis as an all-positive z. Measured on a real staging studyset:
+# every genuine z map was 37-59% negative and the one derived from a p map was
+# 0%. Dropping the analysis costs a study; keeping it biases the result.
+UNSIGNED_MAP_TYPES = frozenset(
+    {"p map (given null hypothesis)", "p map", "p", '1-p map ("inverted" probability)'}
+)
 
 # When one analysis carries several maps of the same NiMARE type, which to
 # prefer. Univariate beta is a cleaner contrast estimate than multivariate.
@@ -49,11 +58,19 @@ def normalize_value_type(value_type):
     """Return the NiMARE image type for a Neurostore map-type label.
 
     Returns None for labels NiMARE has no use for (ROI masks, parcellations,
-    anatomicals and so on).
+    anatomicals and so on) and for the ones it would use wrongly; see
+    :data:`UNSIGNED_MAP_TYPES`.
     """
     if not value_type:
         return None
     return MAP_TYPE_TO_IMAGE_TYPE.get(str(value_type).strip().lower())
+
+
+def unusable_type_reason(value_type):
+    """Why a map type is not passed to NiMARE."""
+    if str(value_type or "").strip().lower() in UNSIGNED_MAP_TYPES:
+        return "carries no sign, so NiMARE would derive an all-positive z"
+    return "not a map type NiMARE can use"
 
 
 def _looks_like_nifti(candidate):
@@ -221,7 +238,9 @@ def download_studyset_images(
             for image in analysis.get("images") or []:
                 image_type = normalize_value_type(image.get("value_type"))
                 if image_type is None:
-                    _record(analysis, image, "not a map type NiMARE can use")
+                    _record(
+                        analysis, image, unusable_type_reason(image.get("value_type"))
+                    )
                     continue
                 source_url = select_image_url(image)
                 if not source_url:
@@ -238,7 +257,12 @@ def download_studyset_images(
     def _fetch(job):
         _, image, _, source_url = job
         destination = image_dir / _local_name(image, source_url)
-        return _download(source_url, destination, session=session, timeout=timeout)
+        # Absolute: NiMARE resolves a relative image reference against the
+        # studyset's base path, which is this same directory, so a relative path
+        # would be joined onto itself.
+        return _download(
+            source_url, destination, session=session, timeout=timeout
+        ).resolve()
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for job, result in zip(jobs, pool.map(_safe(_fetch), jobs)):
@@ -246,6 +270,19 @@ def download_studyset_images(
                 resolved[id(job[1])] = result
 
     attempted = {id(image) for _, image, _, _ in jobs}
+    # NiMARE counts a voxel as valid only where it is finite and non-zero, so a
+    # map with no such voxel contributes nothing anywhere. Under
+    # aggressive_mask=True it empties the intersection mask on its own and every
+    # output map comes back NaN, reported only as a count of masked-out voxels.
+    # Under the liberal default it joins no bag, but still occupies a row in the
+    # estimator's inputs, so it is counted as an analysis that contributed.
+    unusable = {
+        key: reason
+        for key, reason in (
+            (key, _unusable_reason(path)) for key, path in resolved.items()
+        )
+        if reason is not None
+    }
     for study in studyset_dict.get("studies") or []:
         for analysis in study.get("analyses") or []:
             kept = []
@@ -254,6 +291,9 @@ def download_studyset_images(
                 if local_path is None:
                     if id(image) in attempted:
                         _record(analysis, image, "could not be downloaded")
+                    continue
+                if id(image) in unusable:
+                    _record(analysis, image, unusable[id(image)])
                     continue
                 image = dict(image)
                 image["filename"] = str(local_path)
@@ -273,6 +313,32 @@ def download_studyset_images(
         )
 
     return studyset_dict, {k: tuple(v) for k, v in dropped.items()}
+
+
+#: Verdicts from :func:`_unusable_reason`, which reads a whole volume and is
+#: asked the same question once per analysis the map is reached from.
+_UNUSABLE_CACHE = {}
+
+
+def _unusable_reason(path):
+    """Why a downloaded map cannot be used, or None if it can."""
+    key = str(path)
+    if key in _UNUSABLE_CACHE:
+        return _UNUSABLE_CACHE[key]
+
+    try:
+        values = np.asarray(nib.load(key).dataobj, dtype=float)
+    except Exception as exc:  # noqa: BLE001 - an unreadable map is just dropped
+        reason = f"could not be read as a NIfTI ({exc.__class__.__name__})"
+    else:
+        reason = (
+            None
+            if (np.isfinite(values) & (values != 0)).any()
+            else "has no finite non-zero voxel"
+        )
+
+    _UNUSABLE_CACHE[key] = reason
+    return reason
 
 
 def _safe(func):

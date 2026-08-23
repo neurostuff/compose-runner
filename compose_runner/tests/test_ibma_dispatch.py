@@ -186,3 +186,121 @@ def test_ibma_estimator_rejects_group_comparison(runner):
 
     with pytest.raises(ValueError, match="no image-based estimator supports one"):
         runner.run_meta_analysis()
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("conditions", [True, False]), ("database_studyset", "neurostore")],
+    ids=["two-conditions", "database"],
+)
+def test_an_image_based_comparison_is_refused_before_the_work(
+    runner, monkeypatch, key, value
+):
+    """The specification already says this cannot run, so nothing should be fetched.
+
+    ``run_meta_analysis`` catches it too, but only after the maps are staged
+    and, for a database comparison, after the reference studyset has been
+    downloaded.
+    """
+    monkeypatch.setattr(
+        Runner, "load_specification", lambda self, n_cores=None: (Stouffers(), None)
+    )
+    monkeypatch.setattr(
+        Runner,
+        "prepare_images",
+        lambda self: pytest.fail("images must not be staged"),
+    )
+    runner.cached_specification.update(
+        {"type": "IBMA", "estimator": {"type": "Stouffers"}, key: value}
+    )
+
+    with pytest.raises(ValueError, match="no image-based estimator supports one"):
+        runner.process_bundle()
+
+
+def test_a_coordinate_based_run_gets_its_sample_sizes(runner, monkeypatch):
+    """ALE's kernel needs one per experiment, and compose records it on the note.
+
+    One analysis without a sample size fails the whole run, so the copy that
+    ``apply_sample_sizes`` makes has to happen on this path too -- and on a
+    copy, since ``cached_studyset`` is uploaded as the result's snapshot.
+    """
+    captured = {}
+
+    monkeypatch.setattr(
+        Runner, "load_specification", lambda self, n_cores=None: (None, None)
+    )
+    monkeypatch.setattr(Runner, "apply_filter", lambda *a, **kw: (FakeStudyset(), None))
+
+    def fake_studyset(payload, **kwargs):
+        captured["studyset"] = payload
+        return FakeStudyset()
+
+    monkeypatch.setattr("compose_runner.run.Studyset", fake_studyset)
+    runner.cached_specification["type"] = "CBMA"
+    runner.cached_studyset = {
+        "studies": [
+            {
+                "id": "s1",
+                "metadata": {},
+                "analyses": [{"id": "a1", "metadata": {}, "points": []}],
+            }
+        ]
+    }
+    runner.cached_annotation = {
+        "note_keys": {"include": "boolean", "sample_size": "number"},
+        "notes": [{"study": "s1", "analysis": "a1", "note": {"sample_size": 25}}],
+    }
+
+    runner.process_bundle()
+
+    analysis = captured["studyset"]["studies"][0]["analyses"][0]
+    assert analysis["metadata"]["sample_sizes"] == [25.0]
+    # The uploaded snapshot keeps what Neurostore served.
+    assert runner.cached_studyset["studies"][0]["analyses"][0]["metadata"] == {}
+
+
+def test_a_relative_result_dir_is_resolved(tmp_path, monkeypatch):
+    """Staged maps are recorded as paths, and NiMARE resolves relative ones.
+
+    The base path it resolves against is the image directory itself, so a
+    relative result_dir has that directory prepended to a path already holding
+    it and every map goes missing.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    runner = Runner(meta_analysis_id="meta-id", result_dir="results/run1")
+
+    assert runner.result_dir.is_absolute()
+    assert runner.image_dir == tmp_path / "results" / "run1" / "images"
+
+
+@pytest.mark.parametrize(
+    ("spec_type", "estimator_type"),
+    [("IBMA", "PermutedOLS"), ("CBMA", "ALE")],
+)
+def test_an_unset_corrector_argument_is_not_passed_on(
+    runner, spec_type, estimator_type
+):
+    """A null means "not set", but FWECorrector treats every extra as a value.
+
+    It keeps them and hands them to the estimator's correction method, so a
+    ``voxel_thresh`` of null makes ALE threshold against None and PermutedOLS,
+    which has no such parameter, reject the call outright.
+    """
+    runner.cached_specification = {
+        "type": spec_type,
+        "estimator": {"type": estimator_type, "args": {}},
+        "corrector": {
+            "type": "FWECorrector",
+            "args": {"method": "montecarlo", "n_iters": 10, "voxel_thresh": None},
+        },
+        "filter": "include",
+        "conditions": [True],
+        "weights": [1],
+    }
+
+    _, corrector = runner.load_specification()
+
+    assert "voxel_thresh" not in corrector.parameters
+    assert corrector.parameters["n_iters"] == 10

@@ -404,14 +404,15 @@ def test_nothing_usable_fails_with_the_account_attached(tmp_path):
 
 
 @pytest.mark.parametrize("fill", [0.0, np.nan], ids=["all-zero", "all-nan"])
-def test_an_all_nan_result_is_rejected(tmp_path, fill):
-    """A run that computes nothing must not pass as a success.
+def test_a_degenerate_upload_is_dropped_rather_than_failing_the_run(tmp_path, fill):
+    """A map with nothing in it costs its own analysis, not the meta-analysis.
 
     Both fills are degenerate to NiMARE, which counts a voxel as valid only
-    where it is finite *and* non-zero, so under aggressive_mask=True either one
-    empties the mask on its own and every output map comes out NaN. The message
-    has to name the map, since excluding an empty upload is the fix rather than
-    a more liberal mask.
+    where it is finite *and* non-zero: under an aggressive mask either one
+    empties the mask on its own and every output map comes back NaN, and under
+    the liberal one it contributes to nothing while still counting as an
+    analysis that did. Neither outcome names the upload, so it is dropped while
+    the studyset is staged and the coverage table says so.
     """
     runner = _prepared_runner(
         tmp_path, "Stouffers", estimator_args={"aggressive_mask": True}
@@ -421,8 +422,42 @@ def test_an_all_nan_result_is_rejected(tmp_path, fill):
     nib.save(
         nib.Nifti1Image(np.full(SHAPE, fill, dtype=np.float32), AFFINE), str(degenerate)
     )
-    studyset["studies"][0]["analyses"][0]["images"][0]["filename"] = str(degenerate)
-    studyset["studies"][0]["analyses"][0]["images"][0]["url"] = str(degenerate)
+    analysis = studyset["studies"][0]["analyses"][0]
+    analysis["images"][0]["filename"] = str(degenerate)
+    analysis["images"][0]["url"] = str(degenerate)
+
+    runner.process_bundle()
+    runner.run_meta_analysis()
+
+    assert "no finite non-zero voxel" in " ".join(runner.dropped_maps[analysis["id"]])
+    excluded = {a.analysis_id for a in runner.coverage_report.excluded}
+    assert analysis["id"] in excluded
+    assert (
+        "no finite non-zero voxel"
+        in (runner.result_dir / "ibma_coverage.tsv").read_text()
+    )
+
+
+def test_an_all_nan_result_is_rejected(tmp_path):
+    """A run that computes nothing must not pass as a success.
+
+    Every map here carries signal, so none is dropped on the way in; they simply
+    do not overlap, which under ``aggressive_mask=True`` leaves the intersection
+    mask empty and every output map NaN. The message has to say that, since the
+    fix is the mask rather than the uploads.
+    """
+    runner = _prepared_runner(
+        tmp_path, "Stouffers", estimator_args={"aggressive_mask": True}
+    )
+    # Each analysis keeps a different single voxel, so no voxel is valid in all.
+    for i_study, study in enumerate(runner.cached_studyset["studies"]):
+        for i_analysis, analysis in enumerate(study["analyses"]):
+            data = np.zeros(SHAPE, dtype=np.float32)
+            data[i_study % SHAPE[0], i_analysis, 0] = 3.0
+            path = tmp_path / f"disjoint{i_study}{i_analysis}.nii.gz"
+            nib.save(nib.Nifti1Image(data, AFFINE), str(path))
+            analysis["images"][0]["filename"] = str(path)
+            analysis["images"][0]["url"] = str(path)
 
     runner.process_bundle()
     with pytest.raises(ValueError) as excinfo:
@@ -430,4 +465,38 @@ def test_an_all_nan_result_is_rejected(tmp_path, fill):
 
     message = str(excinfo.value)
     assert "no value at any voxel" in message
-    assert "no finite non-zero voxel" in message
+    assert "aggressive_mask" in message
+
+
+def test_a_cancelling_group_names_the_study_and_its_analyses(tmp_path):
+    """One paper's mirrored contrasts fail the fit; the message has to be usable.
+
+    NiMARE groups an estimator's images by the study that contributed them and
+    corrects for the dependence between them. A study that uploaded both
+    directions of a contrast -- A>B and B>A, which real NeuroVault collections
+    do -- has a group whose correlation block sums to zero, and PyMARE refuses
+    it by the integer code NiMARE assigned, which names nothing.
+    """
+    runner = _prepared_runner(tmp_path, "Stouffers")
+    first, second = runner.cached_studyset["studies"][0]["analyses"][:2]
+    source = nib.load(first["images"][0]["filename"])
+    mirrored = tmp_path / "mirrored.nii.gz"
+    nib.save(
+        nib.Nifti1Image(-np.asarray(source.dataobj, dtype=np.float32), AFFINE),
+        str(mirrored),
+    )
+    second["images"][0]["filename"] = str(mirrored)
+    second["images"][0]["url"] = str(mirrored)
+
+    runner.process_bundle()
+    with pytest.raises(ValueError) as excinfo:
+        runner.run_meta_analysis()
+
+    message = str(excinfo.value)
+    assert "study 0" in message
+    assert first["name"] in message and second["name"] in message
+    assert "correlate -1.000" in message
+    assert "groupby" in message
+    # The coverage report has to describe the fit that happened, not the
+    # submission: every analysis reached the estimator before it failed.
+    assert "Used 7 of 7 analyses" in message

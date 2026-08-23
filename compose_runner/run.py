@@ -5,6 +5,7 @@ import hashlib
 import json
 import io
 import pickle
+import re
 import tarfile
 import tempfile
 from copy import deepcopy
@@ -119,6 +120,11 @@ _ENVIRONMENT_URLS = {
 }
 
 
+# PyMARE names the dependence group whose members cancel, but by the integer
+# code NiMARE assigned it, which means nothing to whoever chose the studies.
+_CANCELLED_GROUP = re.compile(r"Group (\S+) pools \d+ estimates")
+
+
 class Runner:
     """Runner for executing and uploading a meta-analysis workflow."""
 
@@ -209,10 +215,14 @@ class Runner:
         self.nv_key = nv_key  # neurovault key to upload to neurovault
 
         # result directory
+        # Resolved: the studyset records where its downloaded maps are, and
+        # NiMARE treats a relative reference as relative to the studyset's base
+        # path -- so a relative result_dir has the base path prepended to a path
+        # that already contains it, and every map goes missing.
         if result_dir is None:
             self.result_dir = Path.cwd() / "results"
         else:
-            self.result_dir = Path(result_dir)
+            self.result_dir = Path(result_dir).expanduser().resolve()
 
         # Where image-based meta-analyses stage their maps. Kept alongside the
         # results so it doubles as a cache across reruns, and so NiMARE has
@@ -584,7 +594,14 @@ class Runner:
         lost along with the study grouping the dependence correction needs.
         """
         column = self.cached_specification["filter"]
-        column_type = self.cached_annotation["note_keys"][f"{column}"]
+        note_keys = (self.cached_annotation or {}).get("note_keys") or {}
+        if column not in note_keys:
+            # Otherwise a bare KeyError, which names the column but nothing else.
+            raise ValueError(
+                f"The specification selects analyses by {column!r}, which this "
+                f"annotation does not record. It has: {sorted(note_keys)}."
+            )
+        column_type = note_keys[column]
         conditions = self.cached_specification.get("conditions", [])
         database_studyset = self.cached_specification.get("database_studyset")
         weights = self.cached_specification.get("weights", [])
@@ -609,6 +626,19 @@ class Runner:
             analysis_ids = list(analysis_id[note_value == weight_conditions[1]])
         else:
             raise ValueError(f"Column type {column_type} not supported.")
+
+        if not analysis_ids:
+            # NiMARE would report this as a missing image type, which sends
+            # whoever reads it looking at the maps rather than at the selection.
+            raise ValueError(
+                f"No analysis is selected: none of the {len(analysis_id)} "
+                f"analyses in the studyset has a {column!r} note that "
+                + (
+                    "is true."
+                    if column_type == "boolean"
+                    else f"equals {weight_conditions[1]!r}."
+                )
+            )
 
         first_studyset = studyset.slice(analyses=analysis_ids)
         if combine:
@@ -746,6 +776,24 @@ class Runner:
         self.staged_studyset = apply_sample_sizes(staged, self.cached_annotation)
         return self.staged_studyset
 
+    def _reject_image_based_comparison(self):
+        """Refuse an image-based group comparison while it is still cheap.
+
+        ``run_meta_analysis`` catches this too, but only after the maps are
+        staged and, for a database comparison, after the whole reference
+        studyset has been downloaded -- tens of megabytes to reach a conclusion
+        the specification already carried.
+        """
+        spec = self.cached_specification or {}
+        if len(spec.get("conditions") or []) <= 1 and not spec.get("database_studyset"):
+            return
+        raise ValueError(
+            "A group comparison was requested, but no image-based estimator "
+            f"supports one. {spec['estimator']['type']} takes a single studyset. "
+            "Choose a single-group selection, or a pairwise coordinate-based "
+            "estimator."
+        )
+
     def process_bundle(self, n_cores=None):
         self.n_cores = n_cores
         image_based = self._is_image_based()
@@ -754,7 +802,19 @@ class Runner:
         # nothing rather than a studyset's worth of downloads.
         estimator, corrector = self.load_specification(n_cores=n_cores)
 
-        studyset_dict = self.prepare_images() if image_based else self.cached_studyset
+        if image_based:
+            self._reject_image_based_comparison()
+            studyset_dict = self.prepare_images()
+        else:
+            # A coordinate-based kernel needs a sample size per experiment as
+            # much as an image-based estimator does -- ALE sizes its Gaussian
+            # from it, and one experiment without one fails the whole run --
+            # and compose records it on the annotation note rather than on the
+            # analysis. Copied, since cached_studyset is uploaded as the
+            # result's snapshot and must keep what Neurostore served.
+            studyset_dict = apply_sample_sizes(
+                deepcopy(self.cached_studyset), self.cached_annotation
+            )
         # The annotation is attached to the studyset rather than wrapped in an
         # object of its own: it is the studyset that owns the notes, and reading
         # them back gives the full analysis ids that ``slice`` selects on.
@@ -812,10 +872,17 @@ class Runner:
         if not finite or any(finite.values()):
             return
 
+        fitted = list((getattr(self.estimator, "inputs_", None) or {}).get("id", []))
         message = [
             "The meta-analysis produced no value at any voxel: every map is "
-            "entirely NaN."
+            f"entirely NaN. {len(fitted)} analysis/analyses reached the "
+            f"estimator, of {len(self.first_studyset.analyses)} submitted."
         ]
+        if len(fitted) < 2:
+            message.append(
+                "A meta-analysis needs at least two analyses to pool; see the "
+                "coverage report for why the rest were left out."
+            )
         empty = self._empty_input_maps()
         aggressive = getattr(self.estimator, "aggressive_mask", False)
         if empty:
@@ -860,6 +927,109 @@ class Runner:
                 self.result_dir / "ibma_coverage.tsv",
             )
 
+    def _analysis_names(self):
+        """Full analysis id to (study name, analysis name), for naming failures."""
+        names = {}
+        for study in self.first_studyset.studies:
+            for analysis in study.analyses:
+                names[f"{study.id}-{analysis.id}"] = (
+                    getattr(study, "name", None) or study.id,
+                    getattr(analysis, "name", None) or analysis.id,
+                )
+        return names
+
+    def _describe_dependence_group(self, label):
+        """Say which analyses a dependence group holds, and why they cancelled.
+
+        NiMARE groups an estimator's images by the study that contributed them,
+        so a group that cancels is one paper whose maps carry no joint signal --
+        most often a pair of mirrored contrasts (A>B and B>A), which are exact
+        negatives and average to zero.
+        """
+        inputs = getattr(self.estimator, "inputs_", None) or {}
+        codes = np.asarray(inputs.get("contrast_names", []))
+        ids = [str(image_id) for image_id in inputs.get("id", [])]
+        if codes.size == 0 or codes.size != len(ids):
+            return None
+        try:
+            code = int(label)
+        except (TypeError, ValueError):
+            return None
+
+        members = [index for index in range(codes.size) if codes[index] == code]
+        if not members:
+            return None
+
+        names = self._analysis_names()
+        studies = {names.get(ids[i], (ids[i], None))[0] for i in members}
+        labelled = [f"{names.get(ids[i], ('', ids[i]))[1]}" for i in members]
+        lines = [
+            f"That group is {' / '.join(sorted(studies))}, which contributed "
+            f"{len(members)} analyses: {', '.join(labelled)}."
+        ]
+
+        image_name = next(
+            (
+                name
+                for name, (kind, _) in (self.estimator._required_inputs or {}).items()
+                if kind == "image" and name in inputs
+            ),
+            None,
+        )
+        if image_name is not None:
+            maps = np.asarray(inputs[image_name], dtype=float)[members]
+            valid = np.isfinite(maps) & (maps != 0)
+            empty = [labelled[i] for i in range(len(members)) if not valid[i].any()]
+            if empty:
+                lines.append(
+                    f"{', '.join(empty)} has no finite non-zero voxel, so it "
+                    "carries no signal to pool."
+                )
+            else:
+                shared = valid.all(axis=0)
+                if shared.sum() > 1:
+                    correlations = np.corrcoef(maps[:, shared])
+                    off = correlations[~np.eye(len(members), dtype=bool)]
+                    lowest = float(np.nanmin(off)) if off.size else None
+                    if lowest is not None and lowest < -0.99:
+                        first, second = np.unravel_index(
+                            np.nanargmin(
+                                np.where(
+                                    np.eye(len(members), dtype=bool),
+                                    np.nan,
+                                    correlations,
+                                )
+                            ),
+                            correlations.shape,
+                        )
+                        lines.append(
+                            f"{labelled[first]} and {labelled[second]} correlate "
+                            f"{lowest:+.3f}: they are the same contrast in "
+                            "opposite directions, and averaging them cancels."
+                        )
+                    elif lowest is not None:
+                        lines.append(
+                            "Over the voxels they share, those maps correlate "
+                            f"between {lowest:+.3f} and {float(np.nanmax(off)):+.3f}, "
+                            "which sums to no joint variance -- what happens when a "
+                            "paper contributes maps of complementary networks."
+                        )
+
+        lines.append(
+            "Keep one analysis per group, or set the estimator's groupby to "
+            "false, which treats every map as independent and inflates "
+            "significance."
+        )
+        return " ".join(lines)
+
+    def _explain_failure(self, message):
+        """Add what compose knows to a NiMARE failure, when it can."""
+        match = _CANCELLED_GROUP.search(message)
+        if match is None:
+            return message
+        described = self._describe_dependence_group(match.group(1))
+        return message if described is None else f"{message}\n\n{described}"
+
     def _fit_image_based(self, workflow):
         """Fit the workflow, then report what it used and what it discarded.
 
@@ -869,11 +1039,22 @@ class Runner:
         try:
             self.meta_results = workflow.fit(self.first_studyset)
         except ValueError as exc:
-            report = coverage.describe_submission(
-                self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
-            )
+            # Which report is right depends on how far the fit got. Once the
+            # estimator has inputs, the transform ran and describing the
+            # submission instead would report every converted analysis as one
+            # NiMARE could not convert.
+            if (getattr(self.estimator, "inputs_", None) or {}).get("id") is not None:
+                report = coverage.describe_estimator(
+                    self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
+                )
+            else:
+                report = coverage.describe_submission(
+                    self.first_studyset, self.estimator, dropped_maps=self.dropped_maps
+                )
             self._describe_coverage(report)
-            raise ValueError(f"{exc}\n\n{report.summary()}") from exc
+            raise ValueError(
+                f"{self._explain_failure(str(exc))}\n\n{report.summary()}"
+            ) from exc
 
         self._describe_coverage(
             coverage.describe_result(
@@ -1044,6 +1225,15 @@ class Runner:
             cor_args = (
                 {**spec["corrector"]["args"]} if spec["corrector"].get("args") else {}
             )
+            # A null is the config's way of saying "not set", but FWECorrector
+            # keeps every extra argument and hands it to the estimator's
+            # correction method, where None is a value: ALE thresholds against
+            # it and PermutedOLS, which has no voxel_thresh at all, rejects it
+            # outright. Dropping them defers to each estimator's own default,
+            # which is what an unset parameter asks for.
+            cor_args = {
+                name: value for name, value in cor_args.items() if value is not None
+            }
             if n_cores is not None and corrector is not FDRCorrector:
                 cor_args["n_cores"] = n_cores
             if cor_args.get("n_iters") is not None and corrector is not FDRCorrector:
