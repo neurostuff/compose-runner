@@ -73,8 +73,8 @@ five that are really NiMARE's are written up for upstream in
 
 **Five of the fixes below were later removed from this repository.** Once
 `docs/nimare-asks.md` 1-5 were implemented, the workarounds here duplicated them
-one layer down, so findings 2, 3 and 11 are now handled entirely upstream, and
-part of finding 5 is. What each section describes is still what was wrong and
+one layer down, so findings 2, 3, 10 and 11 are now handled entirely
+upstream, and part of finding 5 is. What each section describes is still what was wrong and
 how it was diagnosed; the "what was done" is now upstream's. See
 [What changed here](#what-changed-here) for where each one ended up.
 
@@ -262,7 +262,7 @@ studyset — and `test_a_filter_column_no_note_carries_selects_nothing` was
 updated to pin the new contract. The half that mattered is unchanged: an
 un-noted column still selects nothing rather than everything.
 
-### 10. A p-only analysis joined the meta-analysis unsigned — fixed here
+### 10. A p-only analysis joins the meta-analysis unsigned — upstream
 
 `compose_runner.images` mapped Neurostore's `P map (given null hypothesis)` onto
 NiMARE's `p`, and NiMARE's only route from a p map is `p_to_z`, which is
@@ -285,16 +285,12 @@ read:
 | **`8DzjYSWuiXNn-55bN7jfniJMt`** (p-only) | **+0.302 .. +6.490** | **0.0%** |
 | `qJk7k8rMaU26-k8hTTy9oiJn4` | -6.857 .. +7.963 | 36.8% |
 
-`P map`, `P map (given null hypothesis)` and `1-P map ("inverted" probability)`
-are no longer mapped to a NiMARE type; they are dropped with the reason `carries
-no sign, so NiMARE would derive an all-positive z`. This is a mapping decision,
-which this repository owns, rather than a transform rule, which it does not. It
-costs an analysis that has nothing but a p map — but an unsigned z is not
-evidence, and an analysis carrying a z or t map alongside is unaffected, since
-those already take precedence.
-
-**Upstream alternative:** have NiMARE refuse to derive `z` from `p` alone unless
-a sign source is available, which would protect every caller.
+**Fixed upstream, not here.** NiMARE ask 1 warns at the point of conversion and
+still converts, so the analysis contributes and the caller is told why the map is
+one-sided. This repository briefly dropped `P map` and its relatives instead;
+that was reverted, because two places deciding a p map is unusable is one too
+many and dropping costs a real study. Where an analysis carries a t map as well,
+ask 1 now recovers the sign from it and no warning is needed.
 
 ### 11. A null `voxel_thresh` broke every montecarlo FWE run — fixed here
 
@@ -408,7 +404,7 @@ saw.
 | 7 early rejection of a comparison | here: `run.py` `_reject_image_based_comparison` |
 | 8 missing filter column | here: `run.py` `apply_filter` |
 | 9 empty selection | here: `run.py` `apply_filter` |
-| 10 unsigned p maps | here: `images.py` `UNSIGNED_MAP_TYPES` — ask 1 warns and converts, which a service cannot rely on |
+| 10 unsigned p maps | **upstream only** (ask 1 warns at the conversion, and recovers the sign from a t map when there is one) |
 | 11 null corrector arguments | **upstream only** (ask 5 drops them in `Corrector.__init__`) |
 
 Because of those removals the runner now needs a NiMARE newer than the pinned
@@ -416,10 +412,10 @@ Because of those removals the runner now needs a NiMARE newer than the pinned
 
 Regression tests cover what remains: `test_ibma_dispatch.py` (7, 6, 1),
 `test_ibma_end_to_end.py` (4, the unreadable-file half of 3, and the
-aggressive-mask guard 5 does not cover), `test_images.py` (10, and staging now
-opening what it downloaded), and `test_apply_filter.py` (9, which changed a
+aggressive-mask guard 5 does not cover), `test_images.py` (staging now opens what it
+downloads), and `test_apply_filter.py` (9, which changed a
 documented contract). The tests pinning the five removed workarounds went with
-them. The suite is 131 tests.
+them. The suite is 129 tests.
 
 ## Reproducing
 

@@ -12,7 +12,6 @@ from compose_runner.images import (
     download_studyset_images,
     normalize_value_type,
     select_image_url,
-    unusable_type_reason,
 )
 
 
@@ -89,6 +88,7 @@ def _studyset(images):
         ("univariate-beta map", "beta"),
         ("multivariate-beta map", "beta"),
         ("variance map", "varcope"),
+        ("P map (given null hypothesis)", "p"),
         ("  z MAP  ", "z"),
     ],
 )
@@ -104,21 +104,6 @@ def test_normalize_value_type_known_labels(label, expected):
 def test_normalize_value_type_unusable_labels(label):
     """Maps NiMARE cannot use must not be guessed at."""
     assert normalize_value_type(label) is None
-
-
-@pytest.mark.parametrize(
-    "label",
-    ["P map (given null hypothesis)", "P map", '1-P map ("inverted" probability)'],
-)
-def test_unsigned_maps_are_not_passed_to_nimare(label):
-    """A p map has no sign, and NiMARE's only route from one drops it.
-
-    ``p_to_z`` returns an unsigned z, so an analysis whose only usable map is a
-    p map would contribute an all-positive map to the meta-analysis. The reason
-    has to say that rather than claim NiMARE cannot read the label.
-    """
-    assert normalize_value_type(label) is None
-    assert "no sign" in unusable_type_reason(label)
 
 
 def test_select_image_url_compose_uploaded_shape():

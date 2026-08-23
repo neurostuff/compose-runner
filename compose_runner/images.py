@@ -32,17 +32,10 @@ MAP_TYPE_TO_IMAGE_TYPE = {
     "variance map": "varcope",
     "variance": "varcope",
     "v": "varcope",
+    "p map (given null hypothesis)": "p",
+    "p map": "p",
+    "p": "p",
 }
-
-# Labels NiMARE could technically read but must not be given. A p map carries no
-# sign, and NiMARE's only route from one is ``p_to_z``, which is documented to
-# return an unsigned z -- so an analysis whose only usable map is a p map joins
-# the meta-analysis as an all-positive z. Measured on a real staging studyset:
-# every genuine z map was 37-59% negative and the one derived from a p map was
-# 0%. Dropping the analysis costs a study; keeping it biases the result.
-UNSIGNED_MAP_TYPES = frozenset(
-    {"p map (given null hypothesis)", "p map", "p", '1-p map ("inverted" probability)'}
-)
 
 # When one analysis carries several maps of the same NiMARE type, which to
 # prefer. Univariate beta is a cleaner contrast estimate than multivariate.
@@ -57,19 +50,11 @@ def normalize_value_type(value_type):
     """Return the NiMARE image type for a Neurostore map-type label.
 
     Returns None for labels NiMARE has no use for (ROI masks, parcellations,
-    anatomicals and so on) and for the ones it would use wrongly; see
-    :data:`UNSIGNED_MAP_TYPES`.
+    anatomicals and so on).
     """
     if not value_type:
         return None
     return MAP_TYPE_TO_IMAGE_TYPE.get(str(value_type).strip().lower())
-
-
-def unusable_type_reason(value_type):
-    """Why a map type is not passed to NiMARE."""
-    if str(value_type or "").strip().lower() in UNSIGNED_MAP_TYPES:
-        return "carries no sign, so NiMARE would derive an all-positive z"
-    return "not a map type NiMARE can use"
 
 
 def _looks_like_nifti(candidate):
@@ -237,9 +222,7 @@ def download_studyset_images(
             for image in analysis.get("images") or []:
                 image_type = normalize_value_type(image.get("value_type"))
                 if image_type is None:
-                    _record(
-                        analysis, image, unusable_type_reason(image.get("value_type"))
-                    )
+                    _record(analysis, image, "not a map type NiMARE can use")
                     continue
                 source_url = select_image_url(image)
                 if not source_url:

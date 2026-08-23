@@ -13,8 +13,10 @@ staging p map, before ``compose_runner.images`` stopped mapping the label:
 
 No analysis in the staging studysets is p-only -- the one carrying a p map
 carries a z map too, which takes precedence -- so this builds the case out of
-that same real map by keeping only its p map. Run it to see the analysis dropped
-with a reason instead.
+that same real map by keeping only its p map.
+
+The fix is NiMARE's (ask 1 of docs/nimare-asks.md): it warns at the conversion
+and still converts. Run this to see the warning, and the map it produced.
 """
 
 import json

@@ -72,10 +72,9 @@ know the analysis id, so if per-analysis attribution matters, `transform_images`
 (which has `id_` in scope) can aggregate the warning over the loop — an
 implementer's choice, not part of the ask.
 
-*compose-runner keeps its own defence regardless*: `MAP_TYPE_TO_IMAGE_TYPE` no
-longer maps `P map` to `p`, because a warning in a log cannot be relied on by a
-service that uploads its results. That is a workaround for this behaviour, not a
-disagreement with it.
+compose-runner relies on this warning rather than dropping p maps itself. It
+briefly did drop them, and that was reverted: two places deciding a p map is
+unusable is one too many, and the analysis it costs is a real study.
 
 ## 2. Drop an input image with no valid voxel
 
