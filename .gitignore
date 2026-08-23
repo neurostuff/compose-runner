@@ -3,3 +3,13 @@
 .pytest_cache
 _version.py
 __pycache__
+
+# Working directories of scripts/staging_matrix
+scripts/staging_matrix/raw/
+scripts/staging_matrix/bundles/
+scripts/staging_matrix/specs/
+scripts/staging_matrix/images/
+scripts/staging_matrix/runs/
+scripts/staging_matrix/probes/
+scripts/staging_matrix/*.log
+scripts/staging_matrix/prefetch_report.json
