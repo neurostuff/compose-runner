@@ -6,6 +6,10 @@ has to change upstream. `scripts/simulate_ibma_bundle.py` assembles such a bundl
 out of real Neurostore studies and real NeuroVault maps and pushes it through
 `Runner`.
 
+`docs/staging-ibma-matrix.md` is what happened when that was done at scale: 16
+studysets cut from staging against 30 specifications, the eleven bugs it found,
+and what remains upstream.
+
 ## Versions this is written against
 
 | Package | Version | Why |
@@ -171,29 +175,10 @@ significance.
 
 ## Changes needed in NiMARE
 
-1. **`Studyset.slice` silently returns nothing for an id it cannot resolve.**
-   [#1103](https://github.com/neurostuff/NiMARE/pull/1103) closed most of this:
-   a full `<study_id>-<analysis_id>` id is now matched whole rather than split
-   back on the hyphen, so `slice(analyses=["mixed-a-b"])` resolves where it used
-   to return nothing. Two pieces are left:
-
-   ```python
-   ss.slice(analyses=["a-b"])   # -> no analyses: the short id of "mixed-a-b"
-   ss.slice(analyses=["nope"])  # -> no analyses, no error
-   ```
-
-   The short-id path derives its keys with `rsplit("-", 1)[-1]`, so a hyphenated
-   *analysis* id is unreachable by its short form, and an id matching nothing at
-   either level is still an empty studyset rather than an error. This runner now
-   selects on the full ids `annotations_df` reports, so neither bites it, but
-   raising on an unresolvable id would make the failure visible to whoever hits
-   it next.
-
-2. **`_persist_meta_results` spends far more disk than the results need.** Most
-   of a pickled `MetaResult` is `estimator.inputs_`, which for an IBMA holds
-   every input map — data already on disk under `images/`. Dropping `inputs_`
-   before pickling would reclaim almost all of it, if nothing downstream reads
-   it.
+Moved to `docs/nimare-asks.md`, which carries the two asks that used to sit here
+(`Studyset.slice` on an unresolvable id, and `inputs_` bloating a pickled
+`MetaResult`) plus five that came out of the staging run, each with a
+NiMARE-only reproduction in `scripts/nimare_asks_repro.py`.
 
 ## Running the simulation
 
