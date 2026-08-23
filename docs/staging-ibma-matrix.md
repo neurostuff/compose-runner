@@ -71,6 +71,13 @@ repository changed and the case now passes; "upstream" means it did not. The
 five that are really NiMARE's are written up for upstream in
 `docs/nimare-asks.md`, with reproductions that do not involve compose.
 
+**Five of the fixes below were later removed from this repository.** Once
+`docs/nimare-asks.md` 1-5 were implemented, the workarounds here duplicated them
+one layer down, so findings 2, 3 and 11 are now handled entirely upstream, and
+part of finding 5 is. What each section describes is still what was wrong and
+how it was diagnosed; the "what was done" is now upstream's. See
+[What changed here](#what-changed-here) for where each one ended up.
+
 ### 1. A relative `result_dir` sends every map missing — fixed here
 
 ```
@@ -390,25 +397,29 @@ saw.
 
 ## What changed here
 
-| Finding | Files |
+| Finding | Where it lives now |
 | --- | --- |
-| 1 relative `result_dir` | `run.py` `Runner.__init__`, `images.py` `_fetch` |
-| 2 cancelling dependence group | `run.py` `_describe_dependence_group`, `_explain_failure` |
-| 3 unusable staged map | `images.py` `_unusable_reason`, `download_studyset_images` |
-| 4 coverage after a failed fit | `coverage.py` `describe_estimator`, `run.py` `_fit_image_based` |
-| 5 all-NaN message | `run.py` `_check_result_is_not_empty` |
-| 6 coordinate-based sample sizes | `run.py` `process_bundle` |
-| 7 early rejection of a comparison | `run.py` `_reject_image_based_comparison` |
-| 8 missing filter column | `run.py` `apply_filter` |
-| 9 empty selection | `run.py` `apply_filter` |
-| 10 unsigned p maps | `images.py` `UNSIGNED_MAP_TYPES`, `unusable_type_reason` |
-| 11 null corrector arguments | `run.py` `load_specification` |
+| 1 relative `result_dir` | here: `run.py` `Runner.__init__`, `images.py` `_fetch` |
+| 2 cancelling dependence group | **upstream only** (ask 4 drops the group and fits the rest) |
+| 3 unusable staged map | **upstream** (ask 2), except an unreadable file: `images.py` `_unusable_reason` |
+| 4 coverage after a failed fit | here: `coverage.py` `describe_estimator`, `run.py` `_fit_image_based` |
+| 5 all-NaN message | here: `run.py` `_check_result_is_not_empty`, minus the fewer-than-two sentence (ask 3 raises first) |
+| 6 coordinate-based sample sizes | here: `run.py` `process_bundle` |
+| 7 early rejection of a comparison | here: `run.py` `_reject_image_based_comparison` |
+| 8 missing filter column | here: `run.py` `apply_filter` |
+| 9 empty selection | here: `run.py` `apply_filter` |
+| 10 unsigned p maps | here: `images.py` `UNSIGNED_MAP_TYPES` — ask 1 warns and converts, which a service cannot rely on |
+| 11 null corrector arguments | **upstream only** (ask 5 drops them in `Corrector.__init__`) |
 
-Regression tests were added for each: `test_ibma_dispatch.py` (7, 6, 1, 11),
-`test_ibma_end_to_end.py` (2, 3, 4, and the aggressive-mask guard 5 does not
-cover), `test_images.py` (10, and staging now opening what it downloaded), and
-`test_apply_filter.py` (9, which changed a documented contract). The suite is
-135 tests.
+Because of those removals the runner now needs a NiMARE newer than the pinned
+0.21.0rc3; the pin comment in `pyproject.toml` records what it is waiting on.
+
+Regression tests cover what remains: `test_ibma_dispatch.py` (7, 6, 1),
+`test_ibma_end_to_end.py` (4, the unreadable-file half of 3, and the
+aggressive-mask guard 5 does not cover), `test_images.py` (10, and staging now
+opening what it downloaded), and `test_apply_filter.py` (9, which changed a
+documented contract). The tests pinning the five removed workarounds went with
+them. The suite is 131 tests.
 
 ## Reproducing
 
