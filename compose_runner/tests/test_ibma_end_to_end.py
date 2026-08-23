@@ -430,23 +430,18 @@ def test_an_unreadable_upload_is_dropped_rather_than_failing_the_run(tmp_path):
 def test_an_all_nan_result_is_rejected(tmp_path):
     """A run that computes nothing must not pass as a success.
 
-    Every map here carries signal, so none is dropped on the way in; they simply
-    do not overlap, which under ``aggressive_mask=True`` leaves the intersection
-    mask empty and every output map NaN. The message has to say that, since the
-    fix is the mask rather than the uploads.
+    Every analysis here comes from one study, so the studyset clears NiMARE's
+    floor on the analysis count but holds a single dependence group. Every bag
+    of voxels is then skipped for want of independent replication, the fit
+    succeeds, and every output map is NaN.
     """
-    runner = _prepared_runner(
-        tmp_path, "Stouffers", estimator_args={"aggressive_mask": True}
-    )
-    # Each analysis keeps a different single voxel, so no voxel is valid in all.
-    for i_study, study in enumerate(runner.cached_studyset["studies"]):
-        for i_analysis, analysis in enumerate(study["analyses"]):
-            data = np.zeros(SHAPE, dtype=np.float32)
-            data[i_study % SHAPE[0], i_analysis, 0] = 3.0
-            path = tmp_path / f"disjoint{i_study}{i_analysis}.nii.gz"
-            nib.save(nib.Nifti1Image(data, AFFINE), str(path))
-            analysis["images"][0]["filename"] = str(path)
-            analysis["images"][0]["url"] = str(path)
+    runner = _prepared_runner(tmp_path, "Stouffers")
+    studyset = runner.cached_studyset
+    analyses = [a for study in studyset["studies"] for a in study["analyses"]]
+    studyset["studies"] = [
+        {"id": "study0", "name": "study 0", "metadata": {}, "analyses": analyses}
+    ]
+    runner.cached_annotation = _make_annotation(studyset)
 
     runner.process_bundle()
     with pytest.raises(ValueError) as excinfo:
@@ -454,4 +449,4 @@ def test_an_all_nan_result_is_rejected(tmp_path):
 
     message = str(excinfo.value)
     assert "no value at any voxel" in message
-    assert "aggressive_mask" in message
+    assert f"{len(analyses)} analysis/analyses reached the estimator" in message

@@ -22,12 +22,12 @@ dependencies = [
     # publishing this package requires anyway: PyPI rejects direct references.
     # The `parquet` extra is pyarrow, which reading a studyset release needs.
     #
-    # This pin is now behind what the runner assumes. `docs/nimare-asks.md` 1-5
-    # are implemented but unreleased, and the runner no longer works around
-    # them: an unset `voxel_thresh` reaching a correction method is a TypeError
-    # on 0.21.0rc3, and an empty or cancelling input is handled upstream or not
-    # at all. Bump to the release that carries them before shipping.
-    "nimare[parquet]==0.21.0rc3",
+    # 0.21.0rc4 is a floor, not a preference: the runner no longer works around
+    # what `docs/nimare-asks.md` asked for and rc4 delivered. On rc3 an unset
+    # `voxel_thresh` reaching a correction method is a TypeError, an empty
+    # upload empties an aggressive mask, and one study's mirrored contrasts end
+    # the meta-analysis.
+    "nimare[parquet]==0.21.0rc4",
     "click",
     "requests",
     "sentry-sdk",
