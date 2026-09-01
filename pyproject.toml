@@ -15,7 +15,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    "nimare[parquet]==0.21.0rc4",
+    "nimare[parquet]==0.21.0",
     "click",
     "requests",
     "sentry-sdk",
