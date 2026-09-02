@@ -1070,7 +1070,16 @@ class Runner:
             resource_path="/meta-analysis-results/{id}",
             path_params={"id": self.result_id},
             header_params={"Content-Type": "multipart/form-data"},
-            post_params=[("method_description", self.meta_results.description_)],
+            # NiMARE leaves bibtex_ empty when the description cites nothing;
+            # sending "" would blank out whatever compose already stored.
+            post_params=[
+                (name, value)
+                for name, value in (
+                    ("method_description", self.meta_results.description_),
+                    ("method_references", self.meta_results.bibtex_),
+                )
+                if value
+            ],
             files=files,
             auth_settings=["upload_key"],
             collection_formats={},
