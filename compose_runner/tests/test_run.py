@@ -4,6 +4,7 @@ from uuid import UUID
 import pytest
 from neurosynth_compose_sdk.exceptions import ApiException as ComposeApiException
 
+from compose_runner import __version__
 from compose_runner.run import Runner
 
 
@@ -98,6 +99,26 @@ def test_create_result_object_normalizes_uploaded_snapshots():
         "notes": [],
     }
     assert runner.result_id == "result-id"
+
+
+def test_create_result_object_records_the_runner_version():
+    """Compose stores the runner version so a result names what produced it."""
+    captured = {}
+
+    class FakeComposeApi:
+        def meta_analysis_results_post(self, result_init):
+            captured["result_init"] = result_init
+            return type("Result", (), {"id": "result-id"})()
+
+    runner = Runner(meta_analysis_id="meta-id", environment="production")
+    runner.compose_api = FakeComposeApi()
+    runner.cached_studyset = {"studies": []}
+    runner.cached_annotation = {"notes": []}
+
+    runner.create_result_object()
+
+    assert captured["result_init"].cli_version == __version__
+    assert __version__ != "unknown"
 
 
 @pytest.mark.vcr

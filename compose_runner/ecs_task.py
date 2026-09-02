@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import boto3
 
+from compose_runner import __version__
 from compose_runner.run import run as run_compose
 
 NUMBA_CACHE_DIR = Path(os.environ.get("NUMBA_CACHE_DIR", "/tmp/numba_cache"))
@@ -101,7 +102,7 @@ def main() -> None:
     nv_key = os.environ.get(NV_KEY_ENV) or None
     no_upload = _bool_from_env(os.environ.get(NO_UPLOAD_ENV))
     n_cores = _resolve_n_cores(os.environ.get(N_CORES_ENV))
-    compose_runner_version = os.environ.get("COMPOSE_RUNNER_VERSION", "unknown")
+    compose_runner_version = os.environ.get("COMPOSE_RUNNER_VERSION") or __version__
 
     bucket = os.environ.get(RESULTS_BUCKET_ENV)
     prefix = os.environ.get(RESULTS_PREFIX_ENV)
