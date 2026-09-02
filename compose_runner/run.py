@@ -32,7 +32,7 @@ from nimare.meta.ibma import IBMAEstimator
 from nimare.nimads import Studyset, from_parquet
 from nimare.meta.cbma import ALE, ALESubtraction, SCALE
 
-from compose_runner import coverage
+from compose_runner import __version__, coverage
 from compose_runner.images import download_studyset_images
 from compose_runner.metadata import apply_sample_sizes
 
@@ -960,7 +960,12 @@ class Runner:
                 self.existing_annotation_snapshot_id,
             ),
         }
-        kwargs = {"meta_analysis_id": self.meta_analysis_id}
+        # The runner version pins every other version that shaped the
+        # result: its dependencies, NiMARE included, are exact pins.
+        kwargs = {
+            "meta_analysis_id": self.meta_analysis_id,
+            "cli_version": __version__,
+        }
         for entity_name, (
             live_payload,
             existing_payload,
