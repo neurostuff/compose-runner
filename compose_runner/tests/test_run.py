@@ -121,6 +121,62 @@ def test_create_result_object_records_the_runner_version():
     assert __version__ != "unknown"
 
 
+def _capture_upload_params(description, bibtex):
+    """Run upload_results against a fake client and return its post_params."""
+    captured = {}
+
+    class FakeApiClient:
+        def param_serialize(self, **kwargs):
+            captured.update(kwargs)
+            return ()
+
+        def call_api(self):
+            return type("Response", (), {"read": lambda self: None})()
+
+        def response_deserialize(self, response_data, response_types_map):
+            return type("Deserialized", (), {"data": "result"})()
+
+    class FakeComposeApi:
+        api_client = FakeApiClient()
+
+    runner = Runner(meta_analysis_id="meta-id", environment="production")
+    runner.compose_api = FakeComposeApi()
+    runner.result_id = "result-id"
+    runner.meta_results = type(
+        "FakeMetaResult",
+        (),
+        {
+            "maps": {},
+            "tables": {},
+            "description_": description,
+            "bibtex_": bibtex,
+        },
+    )()
+
+    runner.upload_results()
+
+    return captured["post_params"]
+
+
+def test_upload_results_sends_method_description_and_references():
+    """The description and the BibTeX it cites go up as form fields."""
+    assert _capture_upload_params(
+        "An ALE meta-analysis was performed.",
+        "@article{Salo2023,\n  title = {NiMARE},\n}\n",
+    ) == [
+        ("method_description", "An ALE meta-analysis was performed."),
+        ("method_references", "@article{Salo2023,\n  title = {NiMARE},\n}\n"),
+    ]
+
+
+def test_upload_results_omits_empty_method_fields():
+    """NiMARE reports no BibTeX when the description cites nothing; sending
+    "" would blank out what compose already stored."""
+    assert _capture_upload_params("An ALE meta-analysis was performed.", "") == [
+        ("method_description", "An ALE meta-analysis was performed.")
+    ]
+
+
 @pytest.mark.vcr
 def test_run_workflow():
     runner = Runner(
